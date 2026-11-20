@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+
+<html lang="fr"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><meta content="mobile_tab" name="shell-type"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{width:100%;margin:0;padding:0;background-color:#fff9eb;}body{overscroll-behavior-y:none;-webkit-tap-highlight-color:transparent;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "on-tertiary-container": "#fffbff", "tertiary-container": "#b45c36", "surface-dim": "#dfdacc", "on-secondary-fixed-variant": "#5b4300", "surface-container-high": "#ede8da", "surface-variant": "#e8e2d4", "inverse-surface": "#333027", "background": "#fff9eb", "tertiary-fixed": "#ffdbce", "on-tertiary-fixed-variant": "#7a300d", "inverse-primary": "#ffb598", "primary-container": "#b65a31", "surface-bright": "#fff9eb", "on-secondary-fixed": "#261a00", "primary-fixed": "#ffdbce", "on-secondary-container": "#775800", "surface-card": "#FFFFFF", "status-danger": "#C94B3F", "on-secondary": "#ffffff", "on-primary-container": "#fffbff", "tertiary-fixed-dim": "#ffb599", "on-error-container": "#93000a", "sand-highlight": "#E8D5A8", "secondary": "#795900", "text-primary": "#1A1816", "secondary-fixed": "#ffdf9e", "primary": "#97431c", "secondary-container": "#fdd174", "surface-container-highest": "#e8e2d4", "secondary-fixed-dim": "#ebc165", "surface-tint": "#9a451e", "on-primary": "#ffffff", "on-tertiary": "#ffffff", "surface-container-lowest": "#ffffff", "on-surface-variant": "#55433b", "inverse-on-surface": "#f6f0e2", "primary-fixed-dim": "#ffb598", "surface-elevated": "#F3E9D6", "outline-variant": "#dcc1b7", "text-on-terracotta": "#FFF8EC", "surface": "#fff9eb", "tertiary": "#954421", "status-warning": "#E0963A", "error-container": "#ffdad6", "status-success": "#5E9E6E", "text-muted": "#6F685B", "surface-container": "#f3ede0", "on-surface": "#1d1c13", "surface-icon-tile": "#F1DFC8", "surface-container-low": "#f9f3e5", "on-tertiary-fixed": "#370e00", "outline": "#88726a", "on-error": "#ffffff", "on-primary-fixed": "#370e00", "on-background": "#1d1c13", "error": "#ba1a1a", "on-primary-fixed-variant": "#7b2e07" }, "borderRadius": { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" }, "spacing": { "space-sm": "8px", "space-lg": "16px", "space-2xl": "32px", "margin": "20px", "space-md": "12px", "space-xs": "4px", "margin-tablet": "32px", "space-xl": "24px", "gutter": "12px" }, "fontFamily": { "headline-lg": ["Plus Jakarta Sans"], "hero-balance-mobile": ["Inter"], "headline-md": ["Plus Jakarta Sans"], "label-button": ["Plus Jakarta Sans"], "section-amount": ["Inter"], "hero-balance": ["Inter"], "body-md": ["Plus Jakarta Sans"], "caption": ["Plus Jakarta Sans"], "row-amount": ["Inter"], "body-sm": ["Plus Jakarta Sans"], "label-uppercase": ["Plus Jakarta Sans"] }, "fontSize": { "headline-lg": ["22px", { "lineHeight": "28px", "fontWeight": "700" }], "hero-balance-mobile": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }], "headline-md": ["17px", { "lineHeight": "24px", "fontWeight": "600" }], "label-button": ["14px", { "lineHeight": "20px", "fontWeight": "600" }], "section-amount": ["26px", { "lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "700" }], "hero-balance": ["36px", { "lineHeight": "44px", "letterSpacing": "-0.02em", "fontWeight": "700" }], "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }], "caption": ["12px", { "lineHeight": "16px", "fontWeight": "400" }], "row-amount": ["15px", { "lineHeight": "20px", "fontWeight": "600" }], "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }], "label-uppercase": ["11px", { "lineHeight": "14px", "letterSpacing": "0.06em", "fontWeight": "600" }] } } } };</script><style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head><body class="bg-surface text-text-primary min-h-screen flex flex-col antialiased selection:bg-sand-highlight selection:text-text-primary"><header class="fixed top-0 w-full z-50 pt-safe bg-surface/85 backdrop-blur-xl"><div class="h-16 px-margin flex items-center justify-between"><div class="flex items-center gap-space-sm"><div class="w-9 h-9 rounded-xl bg-surface-elevated flex items-center justify-center"><span class="material-symbols-outlined text-primary text-[20px]">savings</span></div><span class="font-headline-md text-headline-md tracking-tight text-text-primary">Analyses</span></div><div class="flex items-center gap-space-sm"><button aria-label="Notifications" class="w-11 h-11 rounded-full flex items-center justify-center text-text-muted hover:text-text-primary active:scale-95 transition-all"><span class="material-symbols-outlined text-[22px]">notifications</span></button><a aria-label="Profil utilisateur" class="w-11 h-11 flex items-center justify-center" data-path="profil" href="#"><img alt="Profile" class="w-8 h-8 rounded-full object-cover shadow-[0_2px_8px_rgba(26,24,22,0.08)]" src="https://lh3.googleusercontent.com/aida/ALJJyrCu9kf1FwfhVQHv6Xt-uZXLxED817GAYlTfPGQJ0ZgrqX_QxncRCLQxMztqqd8sGvVBqDlKZ2Pyy5jfe8UGqTvtsqMhCN1m2B6mRYDVW-17G8CWgw8AwU86rvfClbWoDZQ7Vc9oxIedZf_q_uwW2VrsZYqxSWH1qgnxEk2GdbCly4h2jUSNVcoKLMPK41Ofj7XnPK6u_M2uOLNsH4QLx7dC67Drc4uhROi99dDDjLGHoLCrivjOHeMHq0lK"/></a></div></div></header><main class="flex-1 w-full bg-surface pt-16 pb-36"><div class="flex flex-col w-full px-margin pb-10">
+<div class="w-full pt-space-xs pb-space-lg">
+<div class="flex items-center justify-between mb-space-md">
+<div>
+<span class="font-label-uppercase text-label-uppercase text-text-muted">ARBITRAGE FINANCIER</span>
+<h1 class="font-headline-lg text-headline-lg text-text-primary tracking-tight">Analyses &amp; Priorités</h1>
+</div>
+<div class="w-10 h-10 rounded-2xl bg-surface-elevated flex items-center justify-center text-primary shadow-[0_4px_12px_rgba(26,24,22,0.04)]">
+<span class="material-symbols-outlined text-[22px]">tune</span>
+</div>
+</div>
+<!-- Segmented Navigation Pills -->
+<div class="w-full bg-surface-elevated p-1 rounded-full flex items-center justify-between shadow-inner">
+<button class="flex-1 py-2 px-1 rounded-full text-center font-label-button text-label-button text-text-muted transition-all duration-200 hover:text-text-primary" type="button">
+        Stats
+      </button>
+<button class="flex-1 py-2 px-1 rounded-full text-center font-label-button text-label-button text-text-muted transition-all duration-200 hover:text-text-primary" type="button">
+        Budget
+      </button>
+<button class="flex-1 py-2 px-1 rounded-full bg-primary text-on-primary font-label-button text-label-button shadow-[0_4px_12px_rgba(151,67,28,0.25)] transition-all duration-200" type="button">
+        Besoins
+      </button>
+<button class="flex-1 py-2 px-1 rounded-full text-center font-label-button text-label-button text-text-muted transition-all duration-200 hover:text-text-primary" type="button">
+        Bilans
+      </button>
+</div>
+</div>
+<!-- Carte Maîtresse "Disponible pour les besoins" -->
+<section class="w-full mb-space-xl">
+<div class="w-full bg-surface-card rounded-[28px] p-space-lg shadow-[0_8px_24px_rgba(26,24,22,0.06)] relative overflow-hidden">
+<!-- Decorative Cowrie Frieze Watermark -->
+<div class="absolute -right-6 -bottom-6 w-32 h-32 opacity-10 pointer-events-none text-primary">
+<svg class="w-full h-full" fill="currentColor" viewbox="0 0 100 100">
+<path d="M50 5 C30 5 15 25 15 50 C15 75 30 95 50 95 C70 95 85 75 85 50 C85 25 70 5 50 5 Z M50 20 C52 20 54 35 54 50 C54 65 52 80 50 80 C48 80 46 65 46 50 C46 35 48 20 50 20 Z"></path>
+<circle cx="38" cy="45" r="2"></circle>
+<circle cx="62" cy="45" r="2"></circle>
+<circle cx="38" cy="55" r="2"></circle>
+<circle cx="62" cy="55" r="2"></circle>
+</svg>
+</div>
+<div class="flex items-center gap-space-sm mb-space-md">
+<div class="w-11 h-11 rounded-[14px] bg-surface-icon-tile flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-[22px]">account_balance</span>
+</div>
+<div class="flex flex-col">
+<span class="font-label-uppercase text-label-uppercase text-text-muted">DISPONIBLE POUR VOS BESOINS</span>
+<span class="font-caption text-caption text-text-muted">Capacité nette d'achat</span>
+</div>
+</div>
+<div class="mb-space-sm">
+<div class="font-hero-balance-mobile text-hero-balance-mobile text-text-primary tracking-tight font-bold">
+          91 000 <span class="text-[20px] font-semibold text-primary">FCFA</span>
+</div>
+</div>
+<!-- Explicative Equation -->
+<div class="bg-surface-elevated/70 rounded-2xl p-space-sm mb-space-md">
+<p class="font-body-sm text-body-sm text-text-muted leading-relaxed">
+<span class="font-medium text-text-primary">184 500</span> (Solde) − <span class="font-medium text-text-primary">88 500</span> (Reste budget) − <span class="font-medium text-text-primary">5 000</span> (Réserve Akiba)
+        </p>
+</div>
+<button class="inline-flex items-center gap-1 font-label-button text-label-button text-primary hover:text-tertiary transition-colors" onclick="const d = document.getElementById('calc-detail'); d.classList.toggle('hidden');" type="button">
+<span>Voir le détail du calcul</span>
+<span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+</button>
+<div class="hidden mt-space-md pt-space-md border-t-0 bg-surface-elevated/40 rounded-xl p-3 text-body-sm text-text-muted" id="calc-detail">
+<div class="flex justify-between py-1">
+<span>Total compte principal</span>
+<span class="font-row-amount text-text-primary">184 500 FCFA</span>
+</div>
+<div class="flex justify-between py-1">
+<span>Engagements du mois restants</span>
+<span class="font-row-amount text-status-danger">- 88 500 FCFA</span>
+</div>
+<div class="flex justify-between py-1">
+<span>Matelas de sécurité intouchable</span>
+<span class="font-row-amount text-status-warning">- 5 000 FCFA</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Groupe 1: Payable Maintenant -->
+<section class="w-full mb-space-xl">
+<div class="flex items-center justify-between mb-space-sm">
+<div class="flex items-center gap-space-xs">
+<span class="w-2.5 h-2.5 rounded-full bg-status-success inline-block"></span>
+<h2 class="font-headline-md text-headline-md text-text-primary">Payable maintenant</h2>
+</div>
+<span class="bg-status-success/15 text-status-success font-label-uppercase text-label-uppercase px-2.5 py-1 rounded-full">
+        2 besoins · 45 000 FCFA
+      </span>
+</div>
+<div class="space-y-space-md">
+<!-- Item 1 -->
+<div class="w-full bg-surface-card rounded-[22px] p-space-md shadow-[0_6px_20px_rgba(26,24,22,0.04)] flex flex-col gap-space-sm transition-transform active:scale-[0.99]">
+<div class="flex items-start justify-between">
+<div class="flex items-center gap-space-sm">
+<div class="w-11 h-11 rounded-[14px] bg-surface-icon-tile flex items-center justify-center text-primary flex-shrink-0">
+<span class="material-symbols-outlined text-[20px]">wifi</span>
+</div>
+<div>
+<p class="font-row-amount text-row-amount text-text-primary">1. Forfait Internet Fibre (Canalbox)</p>
+<div class="flex items-center gap-2 mt-0.5">
+<span class="font-caption text-caption text-text-muted">Échéance : dans 3 jours</span>
+<span class="w-1 h-1 rounded-full bg-text-muted/40"></span>
+<span class="font-caption text-caption text-status-success font-medium">Priorité Vitale</span>
+</div>
+</div>
+</div>
+<div class="text-right">
+<span class="font-row-amount text-row-amount text-text-primary block">15 000 FCFA</span>
+</div>
+</div>
+<div class="flex items-center justify-between pt-space-xs">
+<span class="font-caption text-caption text-text-muted">Solde suffisant (100% couvert)</span>
+<button class="h-9 px-4 rounded-full bg-primary text-on-primary font-label-button text-label-button shadow-[0_4px_12px_rgba(151,67,28,0.2)] active:scale-95 transition-all" type="button">
+            Marquer payé
+          </button>
+</div>
+</div>
+<!-- Item 2 -->
+<div class="w-full bg-surface-card rounded-[22px] p-space-md shadow-[0_6px_20px_rgba(26,24,22,0.04)] flex flex-col gap-space-sm transition-transform active:scale-[0.99]">
+<div class="flex items-start justify-between">
+<div class="flex items-center gap-space-sm">
+<div class="w-11 h-11 rounded-[14px] bg-surface-icon-tile flex items-center justify-center text-primary flex-shrink-0">
+<span class="material-symbols-outlined text-[20px]">styler</span>
+</div>
+<div>
+<p class="font-row-amount text-row-amount text-text-primary">2. Chaussures de travail en cuir</p>
+<div class="flex items-center gap-2 mt-0.5">
+<span class="font-caption text-caption text-text-muted">Prêt pour achat immédiat</span>
+<span class="w-1 h-1 rounded-full bg-text-muted/40"></span>
+<span class="font-caption text-caption text-secondary font-medium">Priorité Haute</span>
+</div>
+</div>
+</div>
+<div class="text-right">
+<span class="font-row-amount text-row-amount text-text-primary block">30 000 FCFA</span>
+</div>
+</div>
+<div class="flex items-center justify-between pt-space-xs">
+<span class="font-caption text-caption text-text-muted">Disponibilité validée</span>
+<button class="h-9 px-4 rounded-full bg-primary text-on-primary font-label-button text-label-button shadow-[0_4px_12px_rgba(151,67,28,0.2)] active:scale-95 transition-all" type="button">
+            Marquer payé
+          </button>
+</div>
+</div>
+</div>
+<!-- Remaining Status pill -->
+<div class="mt-space-sm bg-surface-container-high rounded-full px-4 py-2 flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-status-success text-[18px]">verified</span>
+<span class="font-body-sm text-body-sm text-text-primary">Reste après paiement de ces 2 besoins :</span>
+</div>
+<span class="font-row-amount text-row-amount text-status-success">46 000 FCFA</span>
+</div>
+</section>
+<!-- Groupe 2: Payable Bientôt -->
+<section class="w-full mb-space-xl">
+<div class="flex items-center justify-between mb-space-sm">
+<div class="flex items-center gap-space-xs">
+<span class="w-2.5 h-2.5 rounded-full bg-status-warning inline-block"></span>
+<h2 class="font-headline-md text-headline-md text-text-primary">Payable bientôt</h2>
+</div>
+<span class="bg-status-warning/15 text-status-warning font-label-uppercase text-label-uppercase px-2.5 py-1 rounded-full">
+        1 besoin · 40 000 FCFA
+      </span>
+</div>
+<div class="w-full bg-surface-card rounded-[22px] p-space-md shadow-[0_6px_20px_rgba(26,24,22,0.04)] flex flex-col gap-space-sm">
+<div class="flex items-start justify-between">
+<div class="flex items-center gap-space-sm">
+<div class="w-11 h-11 rounded-[14px] bg-secondary-container/40 flex items-center justify-center text-secondary flex-shrink-0">
+<span class="material-symbols-outlined text-[20px]">headphones</span>
+</div>
+<div>
+<p class="font-row-amount text-row-amount text-text-primary">3. Casque audio anti-bruit</p>
+<span class="font-caption text-caption text-text-muted">Confort bureau · Moyenne priorité</span>
+</div>
+</div>
+<span class="font-row-amount text-row-amount text-text-primary">40 000 FCFA</span>
+</div>
+<!-- Warning info note -->
+<div class="bg-surface-elevated rounded-xl p-2.5 flex items-start gap-2">
+<span class="material-symbols-outlined text-status-warning text-[18px] flex-shrink-0 mt-0.5">info</span>
+<p class="font-caption text-caption text-text-muted leading-tight">
+          Il manquera <strong class="text-text-primary font-semibold">14 000 FCFA</strong> si vous réglez les 2 achats prioritaires ci-dessus.
+        </p>
+</div>
+<!-- Coverage Bar -->
+<div class="w-full">
+<div class="flex justify-between items-center mb-1">
+<span class="font-caption text-caption text-text-muted">Couverture actuelle</span>
+<span class="font-caption text-caption font-semibold text-secondary">65% (26 000 / 40 000 FCFA)</span>
+</div>
+<div class="w-full h-2.5 bg-surface-elevated rounded-full overflow-hidden">
+<div class="h-full bg-secondary-container rounded-full" style="width: 65%;"></div>
+</div>
+</div>
+<div class="flex justify-end pt-space-xs">
+<button class="h-9 px-5 rounded-full bg-surface-elevated text-text-primary font-label-button text-label-button hover:bg-surface-icon-tile active:scale-95 transition-all" type="button">
+          Planifier au 25
+        </button>
+</div>
+</div>
+</section>
+<!-- Groupe 3: Hors de portée ce mois -->
+<section class="w-full mb-space-xl">
+<div class="flex items-center justify-between mb-space-sm">
+<div class="flex items-center gap-space-xs">
+<span class="w-2.5 h-2.5 rounded-full bg-status-danger inline-block"></span>
+<h2 class="font-headline-md text-headline-md text-text-primary">Hors de portée ce mois</h2>
+</div>
+<span class="bg-status-danger/15 text-status-danger font-label-uppercase text-label-uppercase px-2.5 py-1 rounded-full">
+        1 besoin · 80 000 FCFA
+      </span>
+</div>
+<div class="w-full bg-surface-card rounded-[22px] p-space-md shadow-[0_6px_20px_rgba(26,24,22,0.04)] flex flex-col gap-space-sm opacity-95">
+<div class="flex items-start justify-between">
+<div class="flex items-center gap-space-sm">
+<div class="w-11 h-11 rounded-[14px] bg-error-container/40 flex items-center justify-center text-status-danger flex-shrink-0">
+<span class="material-symbols-outlined text-[20px]">print</span>
+</div>
+<div>
+<p class="font-row-amount text-row-amount text-text-primary">4. Imprimante multifonction laser</p>
+<span class="font-caption text-caption text-text-muted">Équipement Pro · Souhait différé</span>
+</div>
+</div>
+<span class="font-row-amount text-row-amount text-text-primary">80 000 FCFA</span>
+</div>
+<div class="bg-surface-elevated/70 rounded-xl p-2.5 flex items-center gap-2">
+<span class="material-symbols-outlined text-text-muted text-[18px]">calendar_month</span>
+<p class="font-caption text-caption text-text-muted leading-tight">
+          Report conseillé au mois prochain ou à convertir en cagnotte progressive.
+        </p>
+</div>
+<div class="flex items-center justify-between pt-space-xs">
+<button class="inline-flex items-center gap-1 font-label-button text-label-button text-primary hover:underline" type="button">
+<span class="material-symbols-outlined text-[18px]">savings</span>
+<span>Créer un objectif d'épargne</span>
+</button>
+<span class="font-caption text-caption text-text-muted">Déficit : 34 000 FCFA</span>
+</div>
+</div>
+</section>
+<!-- Bouton d'action d'ajout en bas de liste -->
+<div class="w-full flex justify-center mt-space-xs">
+<button class="w-full h-13 py-3.5 px-6 rounded-full bg-surface-elevated text-primary font-label-button text-label-button flex items-center justify-center gap-2 shadow-[0_4px_16px_rgba(26,24,22,0.04)] active:scale-[0.98] transition-all hover:bg-surface-icon-tile" type="button">
+<span class="material-symbols-outlined text-[22px]">add_circle</span>
+<span>Ajouter un besoin à prioriser</span>
+</button>
+</div>
+</div>
+<script>
+  // Simple micro-interaction for mark-paid feedback
+  document.querySelectorAll('button').forEach(btn => {
+    if (btn.innerText.includes('Marquer payé')) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        this.classList.remove('bg-primary', 'text-on-primary');
+        this.classList.add('bg-status-success', 'text-white');
+        this.innerText = 'Payé ✓';
+        this.disabled = true;
+      });
+    }
+  });
+</script></main><div class="fixed bottom-0 w-full z-50 pointer-events-none pb-safe"><div class="px-gutter pb-space-lg pt-space-xs"><nav class="pointer-events-auto mx-auto max-w-md h-16 bg-surface-card rounded-full shadow-[0_10px_30px_rgba(26,24,22,0.08)] flex items-center justify-between px-space-md relative" data-active-classes="text-primary font-semibold"><a class="flex-1 flex flex-col items-center justify-center min-w-[44px] h-12 text-text-muted hover:text-text-primary transition-all" data-path="accueil" href="#"><span class="material-symbols-outlined text-[24px]">grid_view</span><span class="font-caption text-caption text-[11px] leading-tight mt-0.5">Accueil</span></a><a aria-current="page" class="flex-1 flex flex-col items-center justify-center min-w-[44px] h-12 transition-all text-primary font-semibold" data-path="analyses" href="#"><span class="material-symbols-outlined text-[24px]">bar_chart</span><span class="font-caption text-caption text-[11px] leading-tight mt-0.5">Analyses</span></a><div class="flex-1 flex items-center justify-center relative"><a aria-label="Action Akiba" class="-top-5 absolute w-14 h-14 rounded-2xl bg-text-primary text-text-on-terracotta flex items-center justify-center shadow-[0_8px_20px_rgba(26,24,22,0.22)] active:scale-95 transition-transform duration-150" data-path="akiba" href="#"><span class="material-symbols-outlined text-[26px]">savings</span></a></div><a class="flex-1 flex flex-col items-center justify-center min-w-[44px] h-12 text-text-muted hover:text-text-primary transition-all" data-path="portefeuille" href="#"><span class="material-symbols-outlined text-[24px]">account_balance_wallet</span><span class="font-caption text-caption text-[11px] leading-tight mt-0.5">Portefeuille</span></a><a class="flex-1 flex flex-col items-center justify-center min-w-[44px] h-12 text-text-muted hover:text-text-primary transition-all" data-path="profil" href="#"><span class="material-symbols-outlined text-[24px]">person</span><span class="font-caption text-caption text-[11px] leading-tight mt-0.5">Profil</span></a></nav></div></div></body></html>

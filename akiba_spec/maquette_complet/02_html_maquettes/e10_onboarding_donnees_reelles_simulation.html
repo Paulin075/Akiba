@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+
+<html class="bg-surface" lang="fr"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><meta content="mobile_blank" name="shell-type"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { colors: { "surface-container-low": "#f9f3e5", "primary-fixed-dim": "#ffb598", "sand-highlight": "#E8D5A8", "secondary-container": "#fdd174", "on-secondary-fixed-variant": "#5b4300", "secondary-fixed": "#ffdf9e", "surface-container-high": "#ede8da", "inverse-primary": "#ffb598", "on-primary-fixed": "#370e00", "tertiary-fixed": "#ffdbce", "status-success": "#5E9E6E", "surface-elevated": "#F3E9D6", "on-secondary-container": "#775800", "text-on-terracotta": "#FFF8EC", "status-danger": "#C94B3F", "on-surface-variant": "#55433b", "secondary-fixed-dim": "#ebc165", "surface": "#fff9eb", "surface-tint": "#9a451e", "surface-dim": "#dfdacc", "on-secondary": "#ffffff", "surface-variant": "#e8e2d4", "background": "#fff9eb", "on-error": "#ffffff", "outline-variant": "dcc1b7", "surface-card": "#FFFFFF", "text-muted": "#6F685B", "surface-container-lowest": "#ffffff", "inverse-surface": "#333027", "on-primary-fixed-variant": "#7b2e07", "inverse-on-surface": "#f6f0e2", "tertiary-fixed-dim": "#ffb599", "on-secondary-fixed": "#261a00", "on-tertiary-fixed-variant": "#7a300d", "surface-bright": "#fff9eb", "text-primary": "#1A1816", "on-surface": "#1d1c13", "tertiary-container": "#b45c36", "surface-container-highest": "#e8e2d4", "on-tertiary-fixed": "#370e00", "status-warning": "#E0963A", "on-tertiary": "#ffffff", "surface-container": "#f3ede0", "secondary": "#795900", "on-primary": "#ffffff", "on-background": "#1d1c13", "primary-container": "#b65a31", "on-error-container": "#93000a", "on-tertiary-container": "#fffbff", "surface-icon-tile": "#F1DFC8", "on-primary-container": "#fffbff", "error-container": "#ffdad6", "tertiary": "#954421", "outline": "#88726a", "error": "#ba1a1a", "primary": "#97431c", "primary-fixed": "#ffdbce" }, borderRadius: { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" }, spacing: { "space-sm": "8px", "margin-tablet": "32px", "space-xs": "4px", "gutter": "12px", "space-xl": "24px", "margin": "20px", "space-lg": "16px", "space-2xl": "32px", "space-md": "12px" }, fontFamily: { "hero-balance": ["Inter"], "label-uppercase": ["Plus Jakarta Sans"], "body-sm": ["Plus Jakarta Sans"], "headline-lg": ["Plus Jakarta Sans"], "hero-balance-mobile": ["Inter"], "row-amount": ["Inter"], "body-md": ["Plus Jakarta Sans"], "headline-md": ["Plus Jakarta Sans"], "section-amount": ["Inter"], "label-button": ["Plus Jakarta Sans"], "caption": ["Plus Jakarta Sans"] }, fontSize: { "hero-balance": ["36px", { lineHeight: "44px", letterSpacing: "-0.02em", fontWeight: "700" }], "label-uppercase": ["11px", { lineHeight: "14px", letterSpacing: "0.06em", fontWeight: "600" }], "body-sm": ["13px", { lineHeight: "18px", fontWeight: "400" }], "headline-lg": ["22px", { lineHeight: "28px", fontWeight: "700" }], "hero-balance-mobile": ["32px", { lineHeight: "40px", letterSpacing: "-0.02em", fontWeight: "700" }], "row-amount": ["15px", { lineHeight: "20px", fontWeight: "600" }], "body-md": ["14px", { lineHeight: "20px", fontWeight: "400" }], "headline-md": ["17px", { lineHeight: "24px", fontWeight: "600" }], "section-amount": ["26px", { lineHeight: "32px", letterSpacing: "-0.01em", fontWeight: "700" }], "label-button": ["14px", { lineHeight: "20px", fontWeight: "600" }], "caption": ["12px", { lineHeight: "16px", fontWeight: "400" }] } } } };</script><style>@layer base{html,body{width:100vw;margin:0;padding:0;background-color:#fff9eb;font-family:'Plus Jakarta Sans',sans-serif;color:#1d1c13;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head><body class="bg-surface text-on-surface antialiased min-h-screen flex flex-col pt-safe pb-safe"><main class="flex-1 w-full bg-surface"><div class="flex flex-col w-full pb-8">
+<!-- Top Navigation & Progress Bar -->
+<div class="px-margin pt-4 pb-2 flex items-center justify-between">
+<button aria-label="Retour" class="w-10 h-10 rounded-full bg-surface-card flex items-center justify-center text-text-primary shadow-sm active:scale-95 transition-transform" type="button">
+<span class="material-symbols-outlined text-[20px]">arrow_back</span>
+</button>
+<!-- Progress Indicator Dots (10/11 Active) -->
+<div aria-label="Progression de l'étape" class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="w-3.5 h-1.5 rounded-full bg-primary transition-all"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-surface-elevated"></span>
+</div>
+<!-- Step Label -->
+<span class="font-caption text-caption text-text-muted font-medium">Étape 10/11</span>
+</div>
+<!-- Header Section -->
+<div class="px-margin mt-4">
+<div class="flex items-center gap-2 mb-1.5">
+<span class="font-label-uppercase text-label-uppercase text-primary font-bold tracking-wider">ENVIRONNEMENT DE DÉMARRAGE</span>
+<span class="inline-flex w-1.5 h-1.5 rounded-full bg-sand-highlight"></span>
+</div>
+<h1 class="font-headline-lg text-headline-lg text-text-primary font-bold">Comment démarrer ?</h1>
+<p class="font-body-md text-body-md text-text-muted mt-1 leading-relaxed">
+      Choisissez comment explorer et enregistrer vos premières opérations en toute confiance.
+    </p>
+</div>
+<!-- Interactive Mode Cards -->
+<div class="px-margin mt-6 flex flex-col gap-space-md" id="modeSelector">
+<!-- Option 1: Vraies Données (Selected state) -->
+<div class="relative bg-surface-card rounded-[24px] p-5 shadow-sm cursor-pointer transition-all duration-200 select-none overflow-hidden" id="card-real" onclick="selectMode('real')">
+<!-- Ambient warm tint highlight -->
+<div class="absolute inset-0 bg-primary/5 pointer-events-none opacity-100 transition-opacity" id="tint-real"></div>
+<div class="relative z-10 flex flex-col gap-3">
+<div class="flex items-start justify-between">
+<div class="flex items-center gap-3">
+<div class="w-11 h-11 rounded-[14px] bg-surface-icon-tile flex items-center justify-center text-primary shadow-sm">
+<span class="material-symbols-outlined text-[22px]" style="font-variation-settings: 'FILL' 1;">account_balance_wallet</span>
+</div>
+<div>
+<div class="flex items-center gap-2">
+<h2 class="font-headline-md text-headline-md text-text-primary font-bold">Mes vraies données</h2>
+</div>
+<span class="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-status-success/15 text-status-success font-caption text-caption font-semibold">
+<span class="w-1.5 h-1.5 rounded-full bg-status-success animate-pulse"></span>
+                Base chiffrée SQLite
+              </span>
+</div>
+</div>
+<!-- State Radio Icon -->
+<div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-on-primary shadow-sm transition-transform scale-100" id="check-real">
+<span class="material-symbols-outlined text-[16px] font-bold">check</span>
+</div>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted leading-relaxed pr-2">
+          Commencez votre suivi financier réel avec vos soldes actuels, entièrement protégés en local.
+        </p>
+<div class="flex items-center gap-2 pt-1">
+<span class="px-2.5 py-1 rounded-full bg-primary-fixed text-on-primary-fixed font-caption text-caption font-semibold flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">verified</span>
+            Recommandé
+          </span>
+<span class="font-caption text-caption text-text-muted flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px] text-primary">lock</span> 100% Hors-ligne
+          </span>
+</div>
+</div>
+</div>
+<!-- Option 2: Simulation (Unselected state) -->
+<div class="relative bg-surface-card rounded-[24px] p-5 shadow-sm cursor-pointer transition-all duration-200 select-none overflow-hidden" id="card-sim" onclick="selectMode('sim')">
+<!-- Ambient warm tint highlight -->
+<div class="absolute inset-0 bg-primary/5 pointer-events-none opacity-0 transition-opacity" id="tint-sim"></div>
+<div class="relative z-10 flex flex-col gap-3">
+<div class="flex items-start justify-between">
+<div class="flex items-center gap-3">
+<div class="w-11 h-11 rounded-[14px] bg-surface-elevated flex items-center justify-center text-text-muted shadow-sm">
+<span class="material-symbols-outlined text-[22px]">science</span>
+</div>
+<div>
+<h2 class="font-headline-md text-headline-md text-text-primary font-bold">Essayer en mode simulation</h2>
+<span class="inline-flex items-center mt-0.5 px-2 py-0.5 rounded-full bg-surface-elevated text-text-muted font-caption text-caption font-medium">
+                Données de test isolées
+              </span>
+</div>
+</div>
+<!-- State Radio Icon -->
+<div class="w-6 h-6 rounded-full bg-surface-elevated flex items-center justify-center text-text-muted shadow-sm transition-transform scale-90" id="check-sim">
+<span class="material-symbols-outlined text-[16px] opacity-0" id="icon-sim-check">check</span>
+</div>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted leading-relaxed pr-2">
+          Explorez AKIBA avec des données fictives isolées sans toucher à vos finances ni perturber vos soldes réels.
+        </p>
+<div class="flex items-center gap-2 pt-1">
+<span class="px-2.5 py-1 rounded-full bg-surface-elevated text-text-muted font-caption text-caption font-medium flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">restart_alt</span>
+            Réinitialisable à tout moment
+          </span>
+</div>
+</div>
+</div>
+</div>
+<!-- Configuration & Backup Card -->
+<div class="px-margin mt-6">
+<div class="flex items-center justify-between mb-2.5 px-1">
+<span class="font-label-uppercase text-label-uppercase text-text-muted font-bold tracking-wider">PROTOCOLE DE SAUVEGARDE</span>
+<span class="font-caption text-caption text-primary font-semibold flex items-center gap-0.5">
+<span class="material-symbols-outlined text-[14px]">shield</span> Sécurisé AES-256
+      </span>
+</div>
+<div class="bg-surface-card rounded-[20px] p-4 shadow-sm flex flex-col gap-3">
+<!-- Toggle Row 1: Google Drive -->
+<div class="flex items-center justify-between py-1.5">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-xl bg-surface-elevated flex items-center justify-center text-text-primary">
+<span class="material-symbols-outlined text-[19px]">cloud_sync</span>
+</div>
+<div>
+<span class="font-body-md text-body-md text-text-primary font-semibold block leading-tight">Sauvegarde Google Drive</span>
+<span class="font-caption text-caption text-text-muted block mt-0.5">Archive chiffrée automatique</span>
+</div>
+</div>
+<!-- Accessible Native Toggle Styled -->
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer" onchange="toggleSwitch(this)" type="checkbox"/>
+<div class="w-11 h-6 bg-surface-elevated peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-surface-card after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-primary"></div>
+</label>
+</div>
+<div class="h-[1px] bg-surface-elevated/80 w-full"></div>
+<!-- Toggle Row 2: Home Lab Backup -->
+<div class="flex items-center justify-between py-1.5">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-xl bg-surface-elevated flex items-center justify-center text-text-primary">
+<span class="material-symbols-outlined text-[19px]">router</span>
+</div>
+<div>
+<span class="font-body-md text-body-md text-text-primary font-semibold block leading-tight">Home Lab Backup (Wi-Fi)</span>
+<span class="font-caption text-caption text-text-muted block mt-0.5">Synchronisation NAS local chiffrée</span>
+</div>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer" onchange="toggleSwitch(this)" type="checkbox"/>
+<div class="w-11 h-6 bg-surface-elevated peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-surface-card after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-primary"></div>
+</label>
+</div>
+<div class="h-[1px] bg-surface-elevated/80 w-full"></div>
+<!-- Toggle Row 3: Master Server Sync -->
+<div class="flex items-center justify-between py-1.5">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-xl bg-surface-elevated flex items-center justify-center text-text-primary">
+<span class="material-symbols-outlined text-[19px]">dns</span>
+</div>
+<div>
+<span class="font-body-md text-body-md text-text-primary font-semibold block leading-tight">Synchronisation serveur maître</span>
+<span class="font-caption text-caption text-text-muted block mt-0.5">Réplication instantanée multi-appareils</span>
+</div>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer" onchange="toggleSwitch(this)" type="checkbox"/>
+<div class="w-11 h-6 bg-surface-elevated peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-surface-card after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-primary"></div>
+</label>
+</div>
+<!-- Restore Link -->
+<div class="pt-2 pb-0.5 flex justify-center">
+<button class="group flex items-center gap-1.5 text-text-muted hover:text-primary transition-colors py-1.5 px-3 rounded-full hover:bg-surface-elevated/60" type="button">
+<span class="material-symbols-outlined text-[17px] text-text-muted group-hover:text-primary transition-colors">history</span>
+<span class="font-caption text-caption font-semibold">Restaurer depuis une sauvegarde existante</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Bottom CTA Action Area -->
+<div class="px-margin mt-8 mb-4">
+<button class="w-full h-12 rounded-full bg-primary text-on-primary flex items-center justify-center gap-2 shadow-lg shadow-primary/20 active:scale-[0.98] transition-transform font-label-button text-label-button" type="button">
+<span>Terminer</span>
+<span class="material-symbols-outlined text-[20px] font-bold">check</span>
+</button>
+<!-- Cultural Micro-Accent & Privacy Hint -->
+<div class="flex items-center justify-center gap-1.5 mt-3 text-text-muted opacity-80">
+<span class="material-symbols-outlined text-[14px] text-sand-highlight" style="font-variation-settings: 'FILL' 1;">spa</span>
+<span class="font-caption text-caption">Souveraineté des données garantie · AKIBA Finance</span>
+</div>
+</div>
+</div>
+<script>
+  function selectMode(mode) {
+    const cardReal = document.getElementById('card-real');
+    const cardSim = document.getElementById('card-sim');
+    const tintReal = document.getElementById('tint-real');
+    const tintSim = document.getElementById('tint-sim');
+    const checkReal = document.getElementById('check-real');
+    const checkSim = document.getElementById('check-sim');
+    const iconSimCheck = document.getElementById('icon-sim-check');
+
+    if (mode === 'real') {
+      tintReal.classList.remove('opacity-0');
+      tintReal.classList.add('opacity-100');
+      checkReal.className = 'w-6 h-6 rounded-full bg-primary flex items-center justify-center text-on-primary shadow-sm transition-transform scale-100';
+
+      tintSim.classList.add('opacity-0');
+      tintSim.classList.remove('opacity-100');
+      checkSim.className = 'w-6 h-6 rounded-full bg-surface-elevated flex items-center justify-center text-text-muted shadow-sm transition-transform scale-90';
+      iconSimCheck.classList.add('opacity-0');
+    } else {
+      tintReal.classList.add('opacity-0');
+      tintReal.classList.remove('opacity-100');
+      checkReal.className = 'w-6 h-6 rounded-full bg-surface-elevated flex items-center justify-center text-text-muted shadow-sm transition-transform scale-90';
+
+      tintSim.classList.remove('opacity-0');
+      tintSim.classList.add('opacity-100');
+      checkSim.className = 'w-6 h-6 rounded-full bg-primary flex items-center justify-center text-on-primary shadow-sm transition-transform scale-100';
+      iconSimCheck.classList.remove('opacity-0');
+    }
+  }
+
+  function toggleSwitch(input) {
+    // Micro tactile feedback via UI vibration if supported
+    if (navigator.vibrate) {
+      navigator.vibrate(10);
+    }
+  }
+</script></main></body></html>

@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+
+<html class="bg-surface" lang="fr"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><meta content="mobile_blank" name="shell-type"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { colors: { "surface-container-low": "#f9f3e5", "primary-fixed-dim": "#ffb598", "sand-highlight": "#E8D5A8", "secondary-container": "#fdd174", "on-secondary-fixed-variant": "#5b4300", "secondary-fixed": "#ffdf9e", "surface-container-high": "#ede8da", "inverse-primary": "#ffb598", "on-primary-fixed": "#370e00", "tertiary-fixed": "#ffdbce", "status-success": "#5E9E6E", "surface-elevated": "#F3E9D6", "on-secondary-container": "#775800", "text-on-terracotta": "#FFF8EC", "status-danger": "#C94B3F", "on-surface-variant": "#55433b", "secondary-fixed-dim": "#ebc165", "surface": "#fff9eb", "surface-tint": "#9a451e", "surface-dim": "#dfdacc", "on-secondary": "#ffffff", "surface-variant": "#e8e2d4", "background": "#fff9eb", "on-error": "#ffffff", "outline-variant": "dcc1b7", "surface-card": "#FFFFFF", "text-muted": "#6F685B", "surface-container-lowest": "#ffffff", "inverse-surface": "#333027", "on-primary-fixed-variant": "#7b2e07", "inverse-on-surface": "#f6f0e2", "tertiary-fixed-dim": "#ffb599", "on-secondary-fixed": "#261a00", "on-tertiary-fixed-variant": "#7a300d", "surface-bright": "#fff9eb", "text-primary": "#1A1816", "on-surface": "#1d1c13", "tertiary-container": "#b45c36", "surface-container-highest": "#e8e2d4", "on-tertiary-fixed": "#370e00", "status-warning": "#E0963A", "on-tertiary": "#ffffff", "surface-container": "#f3ede0", "secondary": "#795900", "on-primary": "#ffffff", "on-background": "#1d1c13", "primary-container": "#b65a31", "on-error-container": "#93000a", "on-tertiary-container": "#fffbff", "surface-icon-tile": "#F1DFC8", "on-primary-container": "#fffbff", "error-container": "#ffdad6", "tertiary": "#954421", "outline": "#88726a", "error": "#ba1a1a", "primary": "#97431c", "primary-fixed": "#ffdbce" }, borderRadius: { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" }, spacing: { "space-sm": "8px", "margin-tablet": "32px", "space-xs": "4px", "gutter": "12px", "space-xl": "24px", "margin": "20px", "space-lg": "16px", "space-2xl": "32px", "space-md": "12px" }, fontFamily: { "hero-balance": ["Inter"], "label-uppercase": ["Plus Jakarta Sans"], "body-sm": ["Plus Jakarta Sans"], "headline-lg": ["Plus Jakarta Sans"], "hero-balance-mobile": ["Inter"], "row-amount": ["Inter"], "body-md": ["Plus Jakarta Sans"], "headline-md": ["Plus Jakarta Sans"], "section-amount": ["Inter"], "label-button": ["Plus Jakarta Sans"], "caption": ["Plus Jakarta Sans"] }, fontSize: { "hero-balance": ["36px", { lineHeight: "44px", letterSpacing: "-0.02em", fontWeight: "700" }], "label-uppercase": ["11px", { lineHeight: "14px", letterSpacing: "0.06em", fontWeight: "600" }], "body-sm": ["13px", { lineHeight: "18px", fontWeight: "400" }], "headline-lg": ["22px", { lineHeight: "28px", fontWeight: "700" }], "hero-balance-mobile": ["32px", { lineHeight: "40px", letterSpacing: "-0.02em", fontWeight: "700" }], "row-amount": ["15px", { lineHeight: "20px", fontWeight: "600" }], "body-md": ["14px", { lineHeight: "20px", fontWeight: "400" }], "headline-md": ["17px", { lineHeight: "24px", fontWeight: "600" }], "section-amount": ["26px", { lineHeight: "32px", letterSpacing: "-0.01em", fontWeight: "700" }], "label-button": ["14px", { lineHeight: "20px", fontWeight: "600" }], "caption": ["12px", { lineHeight: "16px", fontWeight: "400" }] } } } };</script><style>@layer base{html,body{width:100vw;margin:0;padding:0;background-color:#fff9eb;font-family:'Plus Jakarta Sans',sans-serif;color:#1d1c13;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head><body class="bg-surface text-on-surface antialiased min-h-screen flex flex-col pt-safe pb-safe"><main class="flex-1 w-full bg-surface"><div class="flex flex-col w-full px-margin pb-space-2xl space-y-space-xl">
+<!-- Top Bar / Stepper Navigation -->
+<div class="flex items-center justify-between pt-space-sm">
+<button aria-label="Retour" class="w-10 h-10 rounded-full bg-surface-card flex items-center justify-center text-text-primary shadow-sm active:scale-95 transition-transform" type="button">
+<span class="material-symbols-outlined text-[20px]">arrow_back</span>
+</button>
+<!-- Micro Progress Dots Bar (9 / 11) -->
+<div class="flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-surface-card shadow-sm">
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-2.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-surface-elevated"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-surface-elevated"></div>
+</div>
+<span class="font-label-uppercase text-label-uppercase text-text-muted">Étape 9/11</span>
+</div>
+<!-- Header Section -->
+<div class="space-y-space-xs">
+<div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-icon-tile text-primary">
+<span class="material-symbols-outlined text-[14px]">tune</span>
+<span class="font-label-uppercase text-label-uppercase tracking-wider">CALIBRATION INTELLIGENTE</span>
+</div>
+<h1 class="font-headline-lg text-headline-lg text-text-primary">Vos habitudes d'épargne</h1>
+<p class="font-body-md text-body-md text-text-muted">Configurez vos règles automatiques pour atteindre vos objectifs plus vite.</p>
+</div>
+<!-- Main Interactive Card: Savings Slider -->
+<div class="bg-surface-card rounded-[24px] p-space-lg shadow-sm space-y-space-lg relative overflow-hidden">
+<!-- Header with dynamic rate pill -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-9 h-9 rounded-[12px] bg-surface-icon-tile flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">savings</span>
+</div>
+<span class="font-headline-md text-headline-md text-text-primary">Taux d'épargne proposé</span>
+</div>
+<span class="font-label-button text-label-button text-primary bg-surface-icon-tile px-3 py-1 rounded-full" id="rate-badge">
+        10 %
+      </span>
+</div>
+<!-- Interactive Slider Track -->
+<div class="space-y-2 pt-2">
+<div class="relative w-full flex items-center h-8">
+<input class="w-full h-2 rounded-full appearance-none cursor-pointer bg-surface-elevated accent-primary focus:outline-none" id="savings-slider" max="30" min="0" step="1" type="range" value="10"/>
+</div>
+<div class="flex justify-between font-caption text-caption text-text-muted px-1">
+<span>0 %</span>
+<span>15 %</span>
+<span>30 %</span>
+</div>
+</div>
+<!-- Highlight Box with Cowrie Motif & Dynamic Calculation -->
+<div class="bg-surface-elevated rounded-[16px] p-space-md flex items-start gap-space-md">
+<div class="w-8 h-8 rounded-full bg-surface-card flex items-center justify-center flex-shrink-0 text-primary mt-0.5 shadow-sm">
+<!-- Cowrie shell stylized glyph -->
+<svg class="w-4 h-4 fill-current" viewbox="0 0 24 24">
+<path d="M12 2C8.13 2 5 6.48 5 12c0 5.52 3.13 10 7 10s7-4.48 7-10c0-5.52-3.13-10-7-10zm0 17c-2.21 0-4-3.58-4-8 0-4.42 1.79-8 4-8s4 3.58 4 8c0 4.42-1.79 8-4 8zm1-11h-2v6h2V8z"></path>
+</svg>
+</div>
+<p class="font-body-sm text-body-sm text-text-primary leading-snug" id="savings-feedback">
+        Exemple : pour <span class="font-semibold text-primary">15 000 FCFA</span> reçus, AKIBA proposera automatiquement d'isoler <span class="font-semibold text-primary" id="calc-amount">1 500 FCFA</span>.
+      </p>
+</div>
+</div>
+<!-- Second Block: Emergency Reserve Input -->
+<div class="bg-surface-card rounded-[20px] p-space-lg shadow-sm space-y-space-sm">
+<div class="flex items-center justify-between">
+<label class="font-label-uppercase text-label-uppercase text-text-muted" for="reserve-input">
+        RÉSERVE DE SÉCURITÉ (FCFA)
+      </label>
+<span class="material-symbols-outlined text-[18px] text-text-muted" title="Protection de trésorerie">shield</span>
+</div>
+<div class="bg-surface-elevated rounded-[16px] px-space-lg py-3 flex items-center justify-between">
+<div class="flex items-baseline space-x-1.5">
+<input class="font-hero-balance-mobile text-hero-balance-mobile text-text-primary bg-transparent w-28 focus:outline-none border-none p-0" id="reserve-input" inputmode="numeric" type="text" value="0"/>
+<span class="font-headline-md text-headline-md text-text-muted">FCFA</span>
+</div>
+<div class="flex items-center gap-1.5">
+<button class="px-2.5 py-1 rounded-full bg-surface-card text-text-primary font-caption text-caption shadow-sm active:scale-95 transition-transform" id="btn-quick-50k" type="button">
+          +50k
+        </button>
+<button class="px-2.5 py-1 rounded-full bg-surface-card text-text-primary font-caption text-caption shadow-sm active:scale-95 transition-transform" id="btn-quick-100k" type="button">
+          +100k
+        </button>
+</div>
+</div>
+<p class="font-caption text-caption text-text-muted px-1">
+      Montant plancher exclu du calcul de vos besoins quotidiens.
+    </p>
+</div>
+<!-- Third Block: Fixed Expenses Toggle Card -->
+<div class="bg-surface-card rounded-[20px] p-space-lg shadow-sm flex items-center justify-between gap-space-md">
+<div class="flex items-start gap-space-md min-w-0">
+<div class="w-10 h-10 rounded-[14px] bg-surface-icon-tile flex items-center justify-center flex-shrink-0 text-primary mt-0.5">
+<span class="material-symbols-outlined text-[20px]">receipt_long</span>
+</div>
+<div class="space-y-0.5 min-w-0">
+<h2 class="font-headline-md text-headline-md text-text-primary truncate">
+          Saisir mes charges fixes
+        </h2>
+<p class="font-body-sm text-body-sm text-text-muted truncate">
+          Loyer, abonnements, factures récurrentes
+        </p>
+</div>
+</div>
+<!-- Accessible Custom Switch -->
+<button aria-checked="true" class="w-12 h-7 rounded-full bg-primary p-0.5 flex items-center transition-colors focus:outline-none flex-shrink-0" id="expenses-toggle" role="switch" type="button">
+<div class="w-6 h-6 rounded-full bg-surface-card shadow-sm transform translate-x-5 transition-transform" id="toggle-thumb"></div>
+</button>
+</div>
+<!-- Visual Anchor & Delight Pill -->
+<div class="rounded-[20px] bg-surface-container-low p-space-md flex items-center gap-space-md">
+<div class="w-8 h-8 rounded-full bg-sand-highlight/40 flex items-center justify-center text-primary flex-shrink-0">
+<span class="material-symbols-outlined text-[18px]">verified</span>
+</div>
+<p class="font-caption text-caption text-on-surface-variant">
+      Ajustable à tout moment depuis votre coffre AKIBA sans frais ni pénalité.
+    </p>
+</div>
+<!-- Bottom Primary Action CTA -->
+<div class="pt-space-sm">
+<button class="w-full h-12 rounded-full bg-primary text-on-primary font-label-button text-label-button flex items-center justify-center gap-2 shadow-md active:scale-[0.98] transition-all" type="button">
+<span>Continuer</span>
+<span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+</button>
+</div>
+</div>
+<script>
+  // Slider interactive feedback
+  const slider = document.getElementById('savings-slider');
+  const rateBadge = document.getElementById('rate-badge');
+  const calcAmount = document.getElementById('calc-amount');
+
+  if (slider && rateBadge && calcAmount) {
+    slider.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      rateBadge.textContent = `${val} %`;
+      const computed = Math.round((15000 * val) / 100);
+      calcAmount.textContent = `${computed.toLocaleString('fr-FR')} FCFA`;
+    });
+  }
+
+  // Quick amount buttons
+  const reserveInput = document.getElementById('reserve-input');
+  const btn50k = document.getElementById('btn-quick-50k');
+  const btn100k = document.getElementById('btn-quick-100k');
+
+  if (reserveInput && btn50k && btn100k) {
+    btn50k.addEventListener('click', () => {
+      let current = parseInt(reserveInput.value.replace(/\s/g, ''), 10) || 0;
+      current += 50000;
+      reserveInput.value = current.toLocaleString('fr-FR');
+    });
+
+    btn100k.addEventListener('click', () => {
+      let current = parseInt(reserveInput.value.replace(/\s/g, ''), 10) || 0;
+      current += 100000;
+      reserveInput.value = current.toLocaleString('fr-FR');
+    });
+  }
+
+  // Toggle switch interactivity
+  const toggleBtn = document.getElementById('expenses-toggle');
+  const toggleThumb = document.getElementById('toggle-thumb');
+
+  if (toggleBtn && toggleThumb) {
+    let isActive = true;
+    toggleBtn.addEventListener('click', () => {
+      isActive = !isActive;
+      toggleBtn.setAttribute('aria-checked', isActive.toString());
+      if (isActive) {
+        toggleBtn.classList.remove('bg-surface-elevated');
+        toggleBtn.classList.add('bg-primary');
+        toggleThumb.classList.remove('translate-x-0');
+        toggleThumb.classList.add('translate-x-5');
+      } else {
+        toggleBtn.classList.remove('bg-primary');
+        toggleBtn.classList.add('bg-surface-elevated');
+        toggleThumb.classList.remove('translate-x-5');
+        toggleThumb.classList.add('translate-x-0');
+      }
+    });
+  }
+</script></main></body></html>

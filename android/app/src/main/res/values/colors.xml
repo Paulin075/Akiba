@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fond du splash natif : terre cuite AKIBA (jamais du blanc). -->
+    <color name="akiba_splash">#C7673D</color>
+    <color name="akiba_splash_deep">#9E4B27</color>
+</resources>

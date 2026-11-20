@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+
+<html class="bg-surface" lang="fr"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><meta content="mobile_blank" name="shell-type"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { colors: { "surface-container-low": "#f9f3e5", "primary-fixed-dim": "#ffb598", "sand-highlight": "#E8D5A8", "secondary-container": "#fdd174", "on-secondary-fixed-variant": "#5b4300", "secondary-fixed": "#ffdf9e", "surface-container-high": "#ede8da", "inverse-primary": "#ffb598", "on-primary-fixed": "#370e00", "tertiary-fixed": "#ffdbce", "status-success": "#5E9E6E", "surface-elevated": "#F3E9D6", "on-secondary-container": "#775800", "text-on-terracotta": "#FFF8EC", "status-danger": "#C94B3F", "on-surface-variant": "#55433b", "secondary-fixed-dim": "#ebc165", "surface": "#fff9eb", "surface-tint": "#9a451e", "surface-dim": "#dfdacc", "on-secondary": "#ffffff", "surface-variant": "#e8e2d4", "background": "#fff9eb", "on-error": "#ffffff", "outline-variant": "dcc1b7", "surface-card": "#FFFFFF", "text-muted": "#6F685B", "surface-container-lowest": "#ffffff", "inverse-surface": "#333027", "on-primary-fixed-variant": "#7b2e07", "inverse-on-surface": "#f6f0e2", "tertiary-fixed-dim": "#ffb599", "on-secondary-fixed": "#261a00", "on-tertiary-fixed-variant": "#7a300d", "surface-bright": "#fff9eb", "text-primary": "#1A1816", "on-surface": "#1d1c13", "tertiary-container": "#b45c36", "surface-container-highest": "#e8e2d4", "on-tertiary-fixed": "#370e00", "status-warning": "#E0963A", "on-tertiary": "#ffffff", "surface-container": "#f3ede0", "secondary": "#795900", "on-primary": "#ffffff", "on-background": "#1d1c13", "primary-container": "#b65a31", "on-error-container": "#93000a", "on-tertiary-container": "#fffbff", "surface-icon-tile": "#F1DFC8", "on-primary-container": "#fffbff", "error-container": "#ffdad6", "tertiary": "#954421", "outline": "#88726a", "error": "#ba1a1a", "primary": "#97431c", "primary-fixed": "#ffdbce" }, borderRadius: { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" }, spacing: { "space-sm": "8px", "margin-tablet": "32px", "space-xs": "4px", "gutter": "12px", "space-xl": "24px", "margin": "20px", "space-lg": "16px", "space-2xl": "32px", "space-md": "12px" }, fontFamily: { "hero-balance": ["Inter"], "label-uppercase": ["Plus Jakarta Sans"], "body-sm": ["Plus Jakarta Sans"], "headline-lg": ["Plus Jakarta Sans"], "hero-balance-mobile": ["Inter"], "row-amount": ["Inter"], "body-md": ["Plus Jakarta Sans"], "headline-md": ["Plus Jakarta Sans"], "section-amount": ["Inter"], "label-button": ["Plus Jakarta Sans"], "caption": ["Plus Jakarta Sans"] }, fontSize: { "hero-balance": ["36px", { lineHeight: "44px", letterSpacing: "-0.02em", fontWeight: "700" }], "label-uppercase": ["11px", { lineHeight: "14px", letterSpacing: "0.06em", fontWeight: "600" }], "body-sm": ["13px", { lineHeight: "18px", fontWeight: "400" }], "headline-lg": ["22px", { lineHeight: "28px", fontWeight: "700" }], "hero-balance-mobile": ["32px", { lineHeight: "40px", letterSpacing: "-0.02em", fontWeight: "700" }], "row-amount": ["15px", { lineHeight: "20px", fontWeight: "600" }], "body-md": ["14px", { lineHeight: "20px", fontWeight: "400" }], "headline-md": ["17px", { lineHeight: "24px", fontWeight: "600" }], "section-amount": ["26px", { lineHeight: "32px", letterSpacing: "-0.01em", fontWeight: "700" }], "label-button": ["14px", { lineHeight: "20px", fontWeight: "600" }], "caption": ["12px", { lineHeight: "16px", fontWeight: "400" }] } } } };</script><style>@layer base{html,body{width:100vw;margin:0;padding:0;background-color:#fff9eb;font-family:'Plus Jakarta Sans',sans-serif;color:#1d1c13;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head><body class="bg-surface text-on-surface antialiased min-h-screen flex flex-col pt-safe pb-safe"><main class="flex-1 w-full bg-surface"><div class="flex flex-col w-full px-margin pb-space-2xl space-y-space-xl">
+<!-- Top Navigation & Progress Bar -->
+<div class="flex flex-col w-full space-y-space-lg pt-space-xs">
+<div class="flex items-center justify-between w-full">
+<button aria-label="Retour" class="w-11 h-11 rounded-full bg-surface-elevated text-on-surface flex items-center justify-center transition-transform active:scale-95" type="button">
+<span class="material-symbols-outlined text-[22px]">arrow_back</span>
+</button>
+<!-- Stepper / Indicator Step 2/10 -->
+<div class="flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-surface-elevated/70">
+<span class="h-2 w-2 rounded-full bg-primary"></span>
+<span class="h-2 w-5 rounded-full bg-primary transition-all duration-300"></span>
+<span class="h-2 w-2 rounded-full bg-sand-highlight/60"></span>
+<span class="h-2 w-2 rounded-full bg-sand-highlight/60"></span>
+<span class="h-2 w-2 rounded-full bg-sand-highlight/60"></span>
+<span class="h-2 w-2 rounded-full bg-sand-highlight/60"></span>
+<span class="h-2 w-2 rounded-full bg-sand-highlight/60"></span>
+<span class="h-2 w-2 rounded-full bg-sand-highlight/60"></span>
+<span class="h-2 w-2 rounded-full bg-sand-highlight/60"></span>
+<span class="h-2 w-2 rounded-full bg-sand-highlight/60"></span>
+</div>
+<div class="w-11 h-11 flex items-center justify-end text-text-muted">
+<span class="font-label-uppercase text-label-uppercase tracking-wider">Étape 2/10</span>
+</div>
+</div>
+<!-- Screen Title & Subtitle -->
+<div class="space-y-space-xs">
+<h1 class="font-headline-lg text-headline-lg text-text-primary tracking-tight">Faisons connaissance</h1>
+<p class="font-body-md text-body-md text-text-muted leading-relaxed">
+        Pour personnaliser votre tableau de bord et vos bilans patrimoniaux.
+      </p>
+</div>
+</div>
+<!-- Form Section -->
+<div class="space-y-space-lg w-full">
+<!-- Prénom -->
+<div class="space-y-2">
+<label class="block font-label-uppercase text-label-uppercase text-text-muted pl-1" for="prenom-input">
+        PRÉNOM
+      </label>
+<div class="relative w-full">
+<input autocomplete="given-name" class="w-full h-[52px] px-space-lg rounded-[16px] bg-surface-elevated text-text-primary font-body-md text-body-md placeholder-text-muted focus:outline-none transition-all duration-200" id="prenom-input" placeholder="Ex. Paulin" type="text" value="Paulin"/>
+<div class="absolute right-4 top-1/2 -translate-y-1/2 text-primary pointer-events-none">
+<span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+</div>
+</div>
+</div>
+<!-- Nom -->
+<div class="space-y-2">
+<label class="block font-label-uppercase text-label-uppercase text-text-muted pl-1" for="nom-input">
+        NOM
+      </label>
+<div class="relative w-full">
+<input autocomplete="family-name" class="w-full h-[52px] px-space-lg rounded-[16px] bg-surface-elevated text-text-primary font-body-md text-body-md placeholder-text-muted focus:outline-none transition-all duration-200" id="nom-input" placeholder="Ex. Amah" type="text" value="Amah"/>
+<div class="absolute right-4 top-1/2 -translate-y-1/2 text-primary pointer-events-none">
+<span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Live Dynamic Preview Card -->
+<div class="w-full rounded-[24px] bg-surface-card p-5 shadow-[0_8px_24px_rgba(26,24,22,0.06)] relative overflow-hidden transition-all duration-300">
+<!-- Subtle tribal pattern accent top-right -->
+<div class="absolute -right-4 -top-4 w-24 h-24 opacity-15 pointer-events-none text-sand-highlight">
+<svg fill="currentColor" viewbox="0 0 100 100">
+<polygon points="50,5 95,95 5,95"></polygon>
+<polygon fill="#fff" points="50,25 80,85 20,85"></polygon>
+</svg>
+</div>
+<div class="flex items-center space-x-4 relative z-10">
+<!-- Monogram Avatar with warm terracotta styling -->
+<div class="w-14 h-14 rounded-full bg-gradient-to-br from-primary to-primary-container text-text-on-terracotta flex items-center justify-center font-headline-md text-headline-md tracking-tight shadow-md shrink-0" id="preview-avatar">
+        PA
+      </div>
+<div class="min-w-0 flex-1 space-y-0.5">
+<div class="flex items-center space-x-1.5">
+<span class="font-headline-md text-headline-md text-text-primary truncate" id="preview-greeting">Bonjour Paulin</span>
+<span class="text-[18px]">👋</span>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted truncate">
+          Votre espace personnel local-first est prêt
+        </p>
+</div>
+</div>
+<!-- Micro-status badge inside preview -->
+<div class="mt-4 pt-3.5 flex items-center justify-between text-text-muted">
+<div class="flex items-center space-x-2">
+<span class="w-2 h-2 rounded-full bg-status-success animate-pulse"></span>
+<span class="font-caption text-caption text-text-muted">Profil synchronisé en cache local</span>
+</div>
+<div class="flex items-center space-x-1 bg-surface-elevated/70 px-2.5 py-1 rounded-full">
+<span class="material-symbols-outlined text-[14px] text-primary" style="font-variation-settings: 'FILL' 1;">shield</span>
+<span class="font-label-uppercase text-[10px] text-primary">Hors-ligne</span>
+</div>
+</div>
+</div>
+<!-- Privacy Security Note -->
+<div class="rounded-[20px] bg-surface-container-low p-4 flex items-start space-x-3.5">
+<div class="w-9 h-9 rounded-[12px] bg-surface-icon-tile flex items-center justify-center shrink-0 text-primary">
+<span class="material-symbols-outlined text-[20px]">lock</span>
+</div>
+<div class="space-y-1 min-w-0 flex-1">
+<span class="font-label-uppercase text-label-uppercase text-text-primary tracking-wide block">Confidentialité absolue</span>
+<p class="font-body-sm text-body-sm text-text-muted leading-relaxed">
+        Le dashboard n'est jamais accessible sans cet écran. Données conservées strictement en local.
+      </p>
+</div>
+</div>
+<!-- Bottom CTA Container -->
+<div class="pt-space-md w-full">
+<button class="w-full h-12 rounded-full bg-primary text-on-primary font-label-button text-label-button shadow-[0_8px_20px_rgba(151,67,28,0.28)] flex items-center justify-center space-x-2 transition-transform active:scale-[0.97]" id="submit-btn" type="button">
+<span>Continuer</span>
+<span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+</button>
+</div>
+</div>
+<script>
+  (function() {
+    const prenomInput = document.getElementById('prenom-input');
+    const nomInput = document.getElementById('nom-input');
+    const greetingEl = document.getElementById('preview-greeting');
+    const avatarEl = document.getElementById('preview-avatar');
+
+    function updateCard() {
+      const prenom = (prenomInput?.value || '').trim();
+      const nom = (nomInput?.value || '').trim();
+
+      const displayPrenom = prenom || 'vous';
+      if (greetingEl) {
+        greetingEl.textContent = 'Bonjour ' + displayPrenom;
+      }
+
+      const pInitial = prenom ? prenom.charAt(0).toUpperCase() : '';
+      const nInitial = nom ? nom.charAt(0).toUpperCase() : '';
+      const initials = (pInitial + nInitial) || (displayPrenom.slice(0, 2).toUpperCase() || 'AK');
+
+      if (avatarEl) {
+        avatarEl.textContent = initials;
+      }
+    }
+
+    prenomInput?.addEventListener('input', updateCard);
+    nomInput?.addEventListener('input', updateCard);
+  })();
+</script></main></body></html>

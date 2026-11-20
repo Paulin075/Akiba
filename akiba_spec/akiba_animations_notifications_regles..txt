@@ -1,0 +1,265 @@
+================================================================================
+
+AKIBA — SPÉCIFICATIONS DES ANIMATIONS, NOTIFICATIONS ET RÈGLES UI/UX
+
+À placer dans le dossier : akiba_spec/
+
+================================================================================
+
+
+
+1. RÈGLES UI/UX EN DURE & STRUCTURE DE NAVIGATION (CORRECTION DES MAQUETTES)
+
+--------------------------------------------------------------------------------
+
+- Barre de navigation inférieure :
+
+  * Toujours ancrée en bas sur toute la largeur, pleine largeur, épurée et sans
+
+    barre flottante centrée au milieu avec bords arrondis (inspirée de la barre
+
+    d'onglets type WhatsApp : Accueil, Analyses, Portefeuille, Profil).
+
+- Boutons d'action flottants sur le côté (droite) :
+
+  * Bouton principal d'ajout rapide (« + ») : représenté par l'emblème cochon
+
+    AKIBA avec son cauri, positionné sur le côté droit au-dessus de la barre
+
+    de navigation (jamais au centre de la barre).
+
+  * Bouton d'accès rapide IA : petite icône dédiée à l'Assistant IA placée
+
+    juste au-dessus du bouton cochon AKIBA.
+
+- Logos des plateformes et banques (dossier akiba_spec/logos/) :
+
+  * Comptes supportés : Liquide, Flooz, Mixx by Yas, Orabank (Banque).
+
+  * Affichage obligatoire : nom du compte suivi de son logo officiel, avec
+
+    une taille adaptée harmonieusement à la hauteur de ligne et aux cartes.
+
+  * Utilisation d'une bibliothèque d'icônes riche et cohérente pour toutes les
+
+    catégories et actions.
+
+- Responsivité et charte graphique :
+
+  * Thème clair par défaut : fond #FAF4E6, surfaces #FFFFFF, surfaces élevées
+
+    #F3E9D6, tuiles d'icônes #F1DFC8, dégradé terre cuite #C7673D -> #9E4B27,
+
+    ocre #C69F47, sable #E8D5A8, textes #1A1816 / #6F685B.
+
+  * Thème sombre optionnel : #0E0D0C, #1A1816, #24211E, textes #F3EEE2 / #A59E90.
+
+  * Couleurs sémantiques : vert #5E9E6E, orange #E0963A, rouge #C94B3F.
+
+  * Devise en FCFA avec chiffres tabulaires (tabular-nums) et responsivité
+
+    stricte sur mobile (Android) et grand écran / bureau (Windows).
+
+- Suivi obligatoire après chaque modification (dossier akiba_spec/) :
+
+  * DEJA_FAIT.md : historique des fonctionnalités et modules terminés.
+
+  * RESTE_A_FAIRE.md : feuille de route découpée phase par phase, module par module.
+
+  * IDEES_AMELIORATION.md : pistes d'amélioration UX, performance et fonctionnalités.
+
+  * REVUE_SECURITE.md : contrôle continu de la sécurité (PIN, masquage, tiers, AES-256).
+
+
+
+
+
+2. ANIMATIONS SIGNATURE AKIBA (FLUIDES, COURTES ET NON BLOQUANTES)
+
+--------------------------------------------------------------------------------
+
+Principes techniques :
+
+- Privilégier les animations natives Flutter (AnimationController, AnimatedContainer,
+
+  AnimatedSwitcher, Curves.easeOutCubic, HapticFeedback) avec des durées courtes
+
+  (150 ms à 600 ms) pour ne jamais ralentir la saisie (< 10 s).
+
+- Accessibilité : prévoir un réglage « Réduire les animations » qui remplace les
+
+  effets complexes par un fondu rapide de 150 ms.
+
+
+
+A. Ouverture de l'application (Splash screen)
+
+- Apparition de l'emblème AKIBA (tirelire + cauri) accompagné de la frise de
+
+  triangles géométriques ocre/sable.
+
+- Le cauri glisse vers la fente de la tirelire avec un léger éclat ocre (#C69F47)
+
+  sur ~900 ms à 1,2 s.
+
+- Si le verrouillage PIN/biométrie est actif, bascule directe sans attente inutile.
+
+
+
+B. Transition de la fin de l'onboarding vers le Dashboard
+
+- Le cauri tombe dans la tirelire sur l'écran E11 (« Prêt et Bienvenue »), puis
+
+  les cartes du tableau de bord apparaissent en cascade légère (décalage de
+
+  40 à 60 ms par bloc : carte Solde disponible -> Aperçu IA -> Actions rapides
+
+  -> Dernières transactions).
+
+
+
+C. Épargne & atteinte de paliers (Coffre épargne, Objectifs, Fonds d'urgence)
+
+- Lors d'un versement vers l'épargne, un jeton/cauri monte vers la jauge et la
+
+  barre de progression se remplit avec un léger rebond fluide (450-600 ms).
+
+- À chaque palier franchi (25 %, 50 %, 75 %, 100 %), le repère du palier
+
+  s'illumine en ocre/sable avec un retour haptique léger.
+
+- Le pourcentage et les montants restent toujours affichés en clair en plus de
+
+  l'animation.
+
+
+
+D. Réception d'argent (Entrée / Dépôt Mobile Money / SMS)
+
+- L'icône ou la carte du compte crédité (Flooz, Mixx by Yas, Liquide, Orabank)
+
+  émet une onde douce verte (#5E9E6E) pendant ~400 ms.
+
+- Le solde en FCFA défile rapidement vers la nouvelle valeur en chiffres
+
+  tabulaires alignés.
+
+- Si l'entrée est marquée « Neutre / Argent de tiers », affichage d'une pastille
+
+  distincte « Tiers isolé » confirmant qu'elle n'affecte pas le solde perso.
+
+
+
+E. Retrait, dépense ou transfert d'argent
+
+- Retour haptique discret à la validation, insertion fluide de la ligne dans
+
+  l'historique (250 ms) et apparition du bandeau « Enregistré · Annuler (5 s) ».
+
+- La jauge du budget de la catégorie s'ajuste en douceur et change de couleur
+
+  selon le seuil : vert (< 80 %), orange (80 % à 100 %), rouge (> 100 %).
+
+
+
+F. Micro-interactions complémentaires
+
+- Assistant vocal IA : halo respirant doux autour du bouton micro pendant
+
+  l'écoute, suivi d'une transformation fluide vers la carte de compréhension
+
+  éditable.
+
+- Mode masqué (confidentialité) : si le masquage est actif, les montants restent
+
+  toujours affichés sous forme de points/tirets (•••••• FCFA) même pendant les
+
+  transitions de solde.
+
+
+
+
+
+3. SYSTÈME DE NOTIFICATIONS QUOTIDIENNES & PÉRIODES DE FÊTE (100 % LOCAL)
+
+--------------------------------------------------------------------------------
+
+Principes :
+
+- Notifications locales planifiées hors ligne (reprogrammées automatiquement au
+
+  redémarrage de l'appareil) avec messages variés et non répétitifs.
+
+- Respect absolu du mode masqué : aucun montant en FCFA n'apparaît dans le texte
+
+  d'une notification lorsque le masquage est activé.
+
+- Contrôle granulaire dans Paramètres > Notifications : activation/désactivation
+
+  indépendante par créneau, personnalisation des heures et plage « Ne pas déranger ».
+
+
+
+A. Créneau du Matin (ex. 07h30 - 08h30 : Démarrage & Transport)
+
+- Objectif : capturer les petites dépenses matinales dès qu'elles ont lieu.
+
+- Exemples de messages :
+
+  * « Tu as dépensé pour ton petit déjeuner ou ton transport ce matin ? Note-le en 3 touches. »
+
+  * « Bonjour ! Pense à noter ton trajet ou ton café du matin pour garder ton budget à jour. »
+
+  * « Rappel du matin : vérifie tes échéances du jour avant de démarrer. »
+
+
+
+B. Créneau du Midi (ex. 12h30 - 13h30 : Pause déjeuner & Achats du midi)
+
+- Objectif : enregistrer les repas du midi et transferts Mobile Money de la mi-journée.
+
+- Exemples de messages :
+
+  * « Pause déjeuner : tu as pris à manger ou fait un achat ce midi ? Pense à l'enregistrer. »
+
+  * « Mi-journée : un transfert Flooz ou Mixx by Yas à noter ? Fais-le en quelques secondes. »
+
+
+
+C. Créneau du Soir (ex. 20h00 - 21h30 : Clôture & Bilan de journée)
+
+- Objectif : éviter les oublis avant la fin de la journée et encourager l'épargne.
+
+- Exemples de messages :
+
+  * « Bilan du soir : as-tu noté toutes tes dépenses de la journée avant de passer à demain ? »
+
+  * « Fin de journée : prends 10 secondes pour vérifier tes comptes et ton épargne du jour. »
+
+  * « Rappel épargne : un petit versement vers ton objectif aujourd'hui ? »
+
+
+
+D. Périodes de fête & événements spéciaux
+
+- Couverture : fêtes de fin d'année (Noël, Nouvel An), fêtes religieuses et
+
+  nationales, rentrée scolaire ou périodes festives configurées par l'utilisateur.
+
+- Objectif : aider l'utilisateur à anticiper les dépenses exceptionnelles et à
+
+  ne pas mélanger les cotisations/argent de tiers avec son budget personnel.
+
+- Exemples de messages :
+
+  * « Période de fête : les petits extras s'additionnent vite. Garde un œil sur ton budget ! »
+
+  * « Préparation des fêtes : pense à isoler l'argent des cotisations ou de tiers dans AKIBA. »
+
+  * « Bonnes fêtes ! Note tes achats festifs au fur et à mesure pour éviter les mauvaises surprises. »
+
+- Option dédiée : possibilité de définir un « Budget spécial fête » temporaire et
+
+  de désactiver les alertes festives à tout moment.
+
+================================================================================

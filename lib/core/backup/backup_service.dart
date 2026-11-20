@@ -1,0 +1,540 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart' as hash;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+
+import '../../data/akiba_store.dart';
+import '../../data/models/account.dart';
+import '../../data/models/budget.dart';
+import '../../data/models/debt.dart';
+import '../../data/models/need.dart';
+import '../../data/models/savings_pot.dart';
+import '../../data/models/third_party.dart';
+import '../../data/models/transaction_record.dart';
+import '../security/aes_box.dart';
+import '../state/akiba_settings.dart';
+
+/// Étapes d'une sauvegarde ou d'une restauration, pour l'animation de suivi.
+enum BackupStage {
+  idle,
+  preparing,
+  encrypting,
+  uploading,
+  downloading,
+  decrypting,
+  verifying,
+  done,
+}
+
+/// Libellé court d'une étape (aucune donnée financière).
+String backupStageLabel(BackupStage stage) => switch (stage) {
+  BackupStage.idle => 'Prêt',
+  BackupStage.preparing => 'Préparation des données',
+  BackupStage.encrypting => 'Chiffrement AES-256-GCM',
+  BackupStage.uploading => 'Envoi de la sauvegarde',
+  BackupStage.downloading => 'Téléchargement de la sauvegarde',
+  BackupStage.decrypting => 'Déchiffrement AES-256-GCM',
+  BackupStage.verifying => 'Vérification d’intégrité',
+  BackupStage.done => 'Terminé',
+};
+
+/// Sauvegarde et synchronisation chiffrées.
+///
+/// **Aucune phrase secrète** : le contenu est sérialisé en JSON puis chiffré en
+/// **AES-256-GCM** avec une clé de 256 bits conservée dans le coffre du système
+/// (Keystore Android / DPAPI Windows). L'enveloppe ne contient en clair que des
+/// métadonnées non sensibles (date, appareil, compteurs, empreinte SHA-256).
+class BackupService {
+  BackupService(
+    this._store, [
+    this._directory,
+    this._storage = const FlutterSecureStorage(),
+    List<int>? keyOverride,
+  ]) : _keyOverride = keyOverride;
+
+  /// Variante de test : clé AES-256 fournie en mémoire (aucun coffre système).
+  BackupService.withKey(this._store, List<int> key)
+    : _directory = null,
+      _storage = const FlutterSecureStorage(),
+      _keyOverride = key;
+
+  final AkibaStore _store;
+  final Directory? _directory;
+  final FlutterSecureStorage _storage;
+  final List<int>? _keyOverride;
+
+  static const int formatVersion = 2;
+  static const int keyLength = 32;
+  static const String _keyName = 'akiba_backup_key';
+
+  /// Réglages jamais sauvegardés ou jamais restaurés.
+  static const Set<String> excludedSettings = <String>{
+    'pin_hash',
+    'pin_salt',
+    'lab_token',
+    'master_url',
+    'master_token',
+    'restore_pending_at',
+    'ai_api_key_sealed',
+    'ai_api_key_updated_at',
+    'profile_photo_updated_at',
+  };
+
+  SecureMasterKey get _vault => SecureMasterKey(_storage, _keyName);
+
+  Future<List<int>> _key({bool create = false}) async {
+    final List<int>? override = _keyOverride;
+    if (override != null) return override;
+    try {
+      return await _vault.read(create: create);
+    } on SecureKeyException catch (error) {
+      throw BackupException(error.message);
+    }
+  }
+
+  Future<Directory> workDirectory() async {
+    final Directory base =
+        _directory ??
+        Directory(
+          p.join((await getApplicationSupportDirectory()).path, 'backups'),
+        );
+    await base.create(recursive: true);
+    return base;
+  }
+
+  // ------------------------------------------------------------------ Créer
+
+  Future<Map<String, dynamic>> createEnvelope({
+    required String deviceId,
+    void Function(BackupStage)? onStage,
+  }) async {
+    onStage?.call(BackupStage.preparing);
+    final Map<String, dynamic> payload = await collectPayload();
+    final List<int> plain = utf8.encode(jsonEncode(payload));
+    final List<int> key = await _key(create: true);
+    if (key.length != keyLength) {
+      throw const BackupException(
+        'Clé de sauvegarde indisponible sur cet appareil.',
+      );
+    }
+
+    onStage?.call(BackupStage.encrypting);
+    final String sealed = await AesBox.seal(utf8.decode(plain), key);
+    onStage?.call(BackupStage.verifying);
+
+    return <String, dynamic>{
+      'format': 'akiba-backup',
+      'version': formatVersion,
+      'cipher': 'AES-256-GCM',
+      'kdf': 'device-key',
+      'keyId': hash.sha256.convert(key).toString().substring(0, 16),
+      'ciphertext': sealed,
+      'sha256': hash.sha256.convert(plain).toString(),
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'deviceId': deviceId,
+      'counts': payload['counts'],
+      'lastMutationAt': payload['lastMutationAt'],
+    };
+  }
+
+  Future<Map<String, dynamic>> collectPayload() async {
+    final List<Account> accounts = await _store.accounts();
+    final List<TransactionRecord> transactions = await _store.transactions(
+      limit: 100000,
+    );
+    final List<SavingsPot> pots = await _store.savingsPots();
+    final List<ThirdParty> parties = await _store.thirdParties();
+    final List<Debt> debts = await _store.debts();
+    final List<BudgetStatus> budgets = await _store.budgets();
+    final List<Need> needs = await _store.needs();
+
+    final Map<String, String> settings = <String, String>{};
+    for (final String key in AkibaSettings.defaults.keys) {
+      if (excludedSettings.contains(key)) continue;
+      final String? value = await _store.setting(key);
+      if (value != null) settings[key] = value;
+    }
+    final String? reserve = await _store.setting('reserve_securite');
+    if (reserve != null) settings['reserve_securite'] = reserve;
+
+    DateTime? lastMutation;
+    for (final TransactionRecord record in transactions) {
+      if (lastMutation == null || record.createdAt.isAfter(lastMutation)) {
+        lastMutation = record.createdAt;
+      }
+    }
+
+    return <String, dynamic>{
+      'accounts': accounts.map((Account a) => a.toRow()).toList(),
+      'transactions': transactions
+          .map((TransactionRecord t) => t.toRow())
+          .toList(),
+      'savingsPots': pots.map((SavingsPot s) => s.toRow()).toList(),
+      'thirdParties': parties.map((ThirdParty t) => t.toRow()).toList(),
+      'debts': debts.map((Debt d) => d.toRow()).toList(),
+      'budgets': budgets.map((BudgetStatus b) => b.budget.toRow()).toList(),
+      'needs': needs.map((Need n) => n.toRow()).toList(),
+      'settings': settings,
+      'counts': <String, int>{
+        'accounts': accounts.length,
+        'transactions': transactions.length,
+        'savingsPots': pots.length,
+        'thirdParties': parties.length,
+        'debts': debts.length,
+        'budgets': budgets.length,
+        'needs': needs.length,
+      },
+      'lastMutationAt': lastMutation?.toUtc().toIso8601String(),
+    };
+  }
+
+  // ---------------------------------------------------------------- Lire
+
+  Future<Map<String, dynamic>> decryptEnvelope(
+    Map<String, dynamic> envelope, {
+    void Function(BackupStage)? onStage,
+  }) async {
+    _checkEnvelope(envelope);
+    final List<int> key = await _key();
+    if (key.length != keyLength) {
+      throw const BackupException(
+        'Cette sauvegarde appartient à un autre appareil : sa clé AES-256 '
+        'n’est pas disponible ici.',
+      );
+    }
+    final String? keyId = envelope['keyId'] as String?;
+    final String expectedKey = hash.sha256
+        .convert(key)
+        .toString()
+        .substring(0, 16);
+    if (keyId != null && keyId != expectedKey) {
+      throw const BackupException(
+        'Cette sauvegarde a été chiffrée avec la clé d’un autre appareil.',
+      );
+    }
+
+    onStage?.call(BackupStage.decrypting);
+    final String? clear = await AesBox.open(
+      envelope['ciphertext'] as String,
+      key,
+    );
+    if (clear == null) {
+      throw const BackupException('Sauvegarde illisible ou altérée.');
+    }
+
+    onStage?.call(BackupStage.verifying);
+    final String expected = envelope['sha256'] as String? ?? '';
+    if (hash.sha256.convert(utf8.encode(clear)).toString() != expected) {
+      throw const BackupException('Empreinte de sauvegarde invalide.');
+    }
+    return jsonDecode(clear) as Map<String, dynamic>;
+  }
+
+  void _checkEnvelope(Map<String, dynamic> envelope) {
+    if (envelope['format'] != 'akiba-backup' ||
+        envelope['cipher'] != 'AES-256-GCM' ||
+        envelope['ciphertext'] is! String) {
+      throw const BackupException('Format de sauvegarde non reconnu.');
+    }
+    final int version = (envelope['version'] as num?)?.toInt() ?? 0;
+    if (version > formatVersion) {
+      throw const BackupException(
+        'Sauvegarde créée par une version plus récente d’AKIBA.',
+      );
+    }
+  }
+
+  // -------------------------------------------------------------- Restaurer
+
+  /// Restaure le contenu d'une enveloppe, sans jamais supprimer de données
+  /// locales : les identifiants déjà présents sont ignorés.
+  Future<Map<String, int>> restore(
+    Map<String, dynamic> envelope, {
+    void Function(BackupStage)? onStage,
+  }) async {
+    onStage?.call(BackupStage.downloading);
+    final Map<String, dynamic> payload = await decryptEnvelope(
+      envelope,
+      onStage: onStage,
+    );
+
+    int accounts = 0;
+    int transactions = 0;
+
+    final Set<String> knownAccounts = (await _store.accounts())
+        .map((Account a) => a.id)
+        .toSet();
+    for (final Object? row in (payload['accounts'] as List<dynamic>? ?? [])) {
+      final Account account = Account.fromRow(
+        Map<String, Object?>.from(row! as Map),
+      );
+      if (knownAccounts.add(account.id)) {
+        await _store.saveAccount(account);
+        accounts++;
+      }
+    }
+
+    final Set<String> knownTransactions = (await _store.transactions(
+      limit: 100000,
+    )).map((TransactionRecord t) => t.id).toSet();
+    for (final Object? row
+        in (payload['transactions'] as List<dynamic>? ?? [])) {
+      final TransactionRecord record = TransactionRecord.fromRow(
+        Map<String, Object?>.from(row! as Map),
+      );
+      if (knownTransactions.add(record.id)) {
+        await _store.saveTransaction(record);
+        transactions++;
+      }
+    }
+
+    for (final Object? row
+        in (payload['savingsPots'] as List<dynamic>? ?? [])) {
+      await _store.saveSavingsPot(
+        SavingsPot.fromRow(Map<String, Object?>.from(row! as Map)),
+      );
+    }
+    for (final Object? row
+        in (payload['thirdParties'] as List<dynamic>? ?? [])) {
+      await _store.saveThirdParty(
+        ThirdParty.fromRow(Map<String, Object?>.from(row! as Map)),
+      );
+    }
+    for (final Object? row in (payload['debts'] as List<dynamic>? ?? [])) {
+      await _store.saveDebt(
+        Debt.fromRow(Map<String, Object?>.from(row! as Map)),
+      );
+    }
+    for (final Object? row in (payload['budgets'] as List<dynamic>? ?? [])) {
+      await _store.saveBudget(
+        Budget.fromRow(Map<String, Object?>.from(row! as Map)),
+      );
+    }
+    for (final Object? row in (payload['needs'] as List<dynamic>? ?? [])) {
+      await _store.saveNeed(
+        Need.fromRow(Map<String, Object?>.from(row! as Map)),
+      );
+    }
+
+    final Object? settings = payload['settings'];
+    if (settings is Map) {
+      for (final MapEntry<Object?, Object?> entry in settings.entries) {
+        final String key = entry.key! as String;
+        if (excludedSettings.contains(key)) continue;
+        final Object? value = entry.value;
+        if (value is String) await _store.setSetting(key, value);
+      }
+    }
+
+    onStage?.call(BackupStage.done);
+    return <String, int>{'accounts': accounts, 'transactions': transactions};
+  }
+
+  // ---------------------------------------------------------------- Transports
+
+  /// Dossier local / Google Drive synchronisé sur l'appareil.
+  Future<File> saveToFolder(
+    Map<String, dynamic> envelope,
+    String folderPath, {
+    void Function(BackupStage)? onStage,
+  }) async {
+    onStage?.call(BackupStage.uploading);
+    final Directory directory = folderPath.trim().isEmpty
+        ? await workDirectory()
+        : Directory(folderPath.trim());
+    await directory.create(recursive: true);
+    final DateTime now = DateTime.now();
+    final String stamp =
+        '${now.year}${_two(now.month)}${_two(now.day)}-'
+        '${_two(now.hour)}${_two(now.minute)}${_two(now.second)}';
+    final File file = File(p.join(directory.path, 'akiba-$stamp.akiba'));
+    await file.writeAsString(jsonEncode(envelope), flush: true);
+    onStage?.call(BackupStage.done);
+    return file;
+  }
+
+  Future<Map<String, dynamic>?> readFolder(
+    String folderPath, {
+    String? fileName,
+    void Function(BackupStage)? onStage,
+  }) async {
+    onStage?.call(BackupStage.downloading);
+    final Directory directory = folderPath.trim().isEmpty
+        ? await workDirectory()
+        : Directory(folderPath.trim());
+    if (!await directory.exists()) return null;
+    final List<File> files = await directory
+        .list()
+        .where((FileSystemEntity e) => e is File && e.path.endsWith('.akiba'))
+        .cast<File>()
+        .toList();
+    if (files.isEmpty) return null;
+    files.sort(
+      (File a, File b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()),
+    );
+    final File chosen = fileName == null
+        ? files.first
+        : files.firstWhere(
+            (File f) => p.basename(f.path) == fileName,
+            orElse: () => files.first,
+          );
+    return jsonDecode(await chosen.readAsString()) as Map<String, dynamic>;
+  }
+
+  /// Envoi HTTP vers le Home Lab, avec jeton facultatif.
+  Future<String> putRemote({
+    required String url,
+    required String token,
+    required Map<String, dynamic> envelope,
+    void Function(BackupStage)? onStage,
+  }) async {
+    onStage?.call(BackupStage.uploading);
+    final Uri uri = _checkedUri(url);
+    final HttpClient client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 12);
+    try {
+      final HttpClientRequest request = await client.putUrl(uri);
+      request.headers.contentType = ContentType.json;
+      if (token.trim().isNotEmpty) {
+        request.headers.set('Authorization', 'Bearer ${token.trim()}');
+      }
+      request.headers.set('X-Akiba-Backup', 'AES-256-GCM');
+      request.write(jsonEncode(envelope));
+      final HttpClientResponse response = await request.close().timeout(
+        const Duration(seconds: 20),
+      );
+      await response.drain<void>();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw BackupException(
+          'Le serveur a refusé la sauvegarde (HTTP ${response.statusCode}).',
+        );
+      }
+      onStage?.call(BackupStage.verifying);
+      return uri.toString();
+    } on BackupException {
+      rethrow;
+    } on SocketException {
+      throw const BackupException(
+        'Serveur injoignable : vérifiez l’adresse et le Wi-Fi.',
+      );
+    } on TimeoutException {
+      throw const BackupException('Le serveur n’a pas répondu à temps.');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<Map<String, dynamic>?> fetchRemote({
+    required String url,
+    required String token,
+    void Function(BackupStage)? onStage,
+  }) async {
+    onStage?.call(BackupStage.downloading);
+    final Uri uri = _checkedUri(url);
+    final HttpClient client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 12);
+    try {
+      final HttpClientRequest request = await client.getUrl(uri);
+      if (token.trim().isNotEmpty) {
+        request.headers.set('Authorization', 'Bearer ${token.trim()}');
+      }
+      final HttpClientResponse response = await request.close().timeout(
+        const Duration(seconds: 20),
+      );
+      final String body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 20));
+      if (response.statusCode == 404) return null;
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw BackupException(
+          'Lecture impossible (HTTP ${response.statusCode}).',
+        );
+      }
+      return jsonDecode(body) as Map<String, dynamic>;
+    } on BackupException {
+      rethrow;
+    } on FormatException {
+      throw const BackupException('Réponse du serveur illisible.');
+    } on SocketException {
+      throw const BackupException('Serveur injoignable.');
+    } on TimeoutException {
+      throw const BackupException('Le serveur n’a pas répondu à temps.');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Uri _checkedUri(String raw) {
+    final Uri? uri = Uri.tryParse(raw.trim());
+    if (uri == null ||
+        !(uri.scheme == 'http' || uri.scheme == 'https') ||
+        uri.host.isEmpty) {
+      throw const BackupException('Adresse invalide (http ou https attendu).');
+    }
+    return uri;
+  }
+
+  // ------------------------------------------------------------------ Outils
+
+  static String _two(int value) => value.toString().padLeft(2, '0');
+
+  /// Métadonnées lisibles sans clé.
+  static BackupMetadata metadata(Map<String, dynamic> envelope) {
+    final Map<String, dynamic> counts = Map<String, dynamic>.from(
+      envelope['counts'] as Map? ?? const <String, dynamic>{},
+    );
+    return BackupMetadata(
+      createdAt:
+          DateTime.tryParse(envelope['createdAt'] as String? ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+      deviceId: envelope['deviceId'] as String? ?? '',
+      lastMutationAt: DateTime.tryParse(
+        envelope['lastMutationAt'] as String? ?? '',
+      ),
+      transactions: (counts['transactions'] as num?)?.toInt() ?? 0,
+      accounts: (counts['accounts'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class BackupMetadata {
+  const BackupMetadata({
+    required this.createdAt,
+    required this.deviceId,
+    required this.transactions,
+    required this.accounts,
+    this.lastMutationAt,
+  });
+
+  final DateTime createdAt;
+  final String deviceId;
+  final DateTime? lastMutationAt;
+  final int transactions;
+  final int accounts;
+
+  /// Vrai si cette sauvegarde contient des mouvements plus récents que ceux
+  /// connus localement : un conflit doit alors être confirmé.
+  bool isNewerThan(DateTime? localLastMutation) {
+    if (localLastMutation == null) return false;
+    return lastMutationAt != null && lastMutationAt!.isAfter(localLastMutation);
+  }
+}
+
+class BackupException implements Exception {
+  const BackupException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// Utilitaire de test : sérialise une enveloppe pour un fichier.
+Uint8List encodeEnvelope(Map<String, dynamic> envelope) =>
+    Uint8List.fromList(utf8.encode(jsonEncode(envelope)));
