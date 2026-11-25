@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../data/models/account_brand.dart';
+import '../format/akiba_currency.dart';
 import '../theme/akiba_colors.dart';
 import '../theme/akiba_tokens.dart';
 import '../theme/akiba_typography.dart';
@@ -28,6 +29,13 @@ abstract final class BrandImages {
     }
     const AssetImage('assets/profile/avatar_default.jpg').resolve(config);
     const AssetImage('assets/brand/app_icon.png').resolve(config);
+    // Drapeaux de devises embarqués : tuile prête dès le premier affichage.
+    for (final AkibaCurrency currency in AkibaCurrency.values) {
+      AssetImage(currency.assetPath).resolve(config);
+    }
+    // Animation cochon + cauri : les deux images sont prêtes avant la première
+    // image de l'ouverture et avant toute célébration d'épargne.
+    const AssetImage('assets/brand/cochon.png').resolve(config);
     const AssetImage('assets/brand/cauri.png').resolve(config);
   }
 }
@@ -63,19 +71,23 @@ class BrandLogo extends StatelessWidget {
   Widget build(BuildContext context) {
     final AkibaColors c = AkibaColors.of(context);
     final double value = size.value;
-    // Orabank est un logotype très large : il lui faut une tuile plus large et
-    // presque toute la surface pour ne pas paraître minuscule. Flooz et Mixx
-    // gagnent aussi un peu de place, sans perdre leur netteté.
+    // Orabank est un logotype très large : il lui faut une tuile nettement
+    // plus large (2×) pour ne pas paraître minuscule. Flooz et Mixx by Yas
+    // gagnent un peu de place, sans perdre leur netteté.
     final bool wide = brand == AccountBrand.orabank;
-    final double width = wide ? value * 1.7 : value;
-    final double padding = wide ? value * 0.06 : value * 0.05;
+    final bool mobileMoney =
+        brand == AccountBrand.flooz || brand == AccountBrand.mixxByYas;
+    final double scale = wide ? 1.08 : (mobileMoney ? 1.14 : 1);
+    final double width = wide ? value * 2 : value * scale;
+    final double height = value * scale;
+    final double padding = wide ? value * 0.03 : value * 0.04;
 
     return Container(
       width: width,
-      height: value,
+      height: height,
       padding: EdgeInsets.symmetric(
         horizontal: padding,
-        vertical: padding * 1.6,
+        vertical: wide ? padding * 0.8 : padding,
       ),
       decoration: BoxDecoration(
         // Les logos officiels sont sur fond clair : la tuile reste blanche
@@ -180,12 +192,21 @@ class AccountBadge extends StatelessWidget {
         ),
         if (amountLabel != null) ...<Widget>[
           const SizedBox(width: AkibaSpacing.md),
-          Text(
-            amountLabel!,
-            style: AkibaTypography.money(
-              nameSize,
-              weight: FontWeight.w600,
-              color: amountColor ?? c.textPrimary,
+          // Montant long sur petit écran : il réduit son corps au lieu de
+          // pousser la ligne hors de la carte.
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: Text(
+                amountLabel!,
+                maxLines: 1,
+                style: AkibaTypography.money(
+                  nameSize,
+                  weight: FontWeight.w600,
+                  color: amountColor ?? c.textPrimary,
+                ),
+              ),
             ),
           ),
         ],

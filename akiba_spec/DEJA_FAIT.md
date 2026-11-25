@@ -1,6 +1,6 @@
 # DEJA_FAIT — Journal AKIBA
 
-Dernière mise à jour : **20/11/2026** · Étapes **1.1 → 1.3** de la Phase 1, puis
+Dernière mise à jour : **25/11/2026** · Étapes **1.1 → 1.3** de la Phase 1, puis
 **Étapes 4 → 11** (saisie rapide, portefeuille, analyses, profil, assistant IA /
 SMS / sauvegardes, onboarding E1→E11, animations, revue complète et
 configuration release, gestion de la clé IA et cascade de modèles, règles
@@ -1013,3 +1013,833 @@ téléphone et le dépôt Drive restent à exercer par la personne.
 contrôlé visuellement par mes soins.
 - `flutter build apk --release` toujours non exécuté.
 
+### Étape 14 — Revue et correctifs ciblés (20/11/2026)
+
+- Avatar : `avatar_default.jpg` correspond à `akiba_spec/argent.jpg`; recadrage avec déplacement/zoom avant validation et aperçu au toucher.
+- Marque et thèmes : icône générée sur blanc pur avec empreinte augmentée à 90 %; splash blanc avec cauri animé; logos locaux haute qualité, Flooz/Mixx agrandis et Orabank élargi; champs liés au texte primaire des cinq thèmes.
+- Onboarding : choix thème/langue en première page, langue persistée au choix; Google avant les comptes, détection Drive si compte lié; permissions OS à activation. OAuth PKCE complété par vérification `state`. Le refus Google Cloud `access_denied` reste externe au code.
+- Analyses : « Tout » évite le chargement inutile des mouvements; dashboard, portefeuille et analyses rechargent lors du changement de magasin réel/simulation.
+- Sauvegarde : AES-256-GCM sans phrase secrète, étapes animées, Google Drive/Home Lab seulement. Les clés maître historiques restent exclues des exports.
+- Voix/simulation/rappels : dictée `onDevice`, parsing local des créances/dettes, icônes par libellé, célébration après épargne vocale; simulation mémoire isolée FCFA avec revenu Vente corrigé positif; Workmanager repas et dépenses toutes les 30 minutes, sans montant.
+- Performance : préchauffage des images de marque/avatar et réduction du chargement dans « Tout ».
+
+`dart format` terminé; `flutter analyze` : **No issues found**; `flutter test --reporter compact` : **81 tests passés** (dont le test de construction OAuth). OAuth réel, permissions natives et rendu sur appareil restent à vérifier.
+
+### Correctif OAuth Android — requête installée minimale
+
+La requête Google utilise maintenant `http://127.0.0.1:<port>` à la racine (sans `/oauth2callback`), les scopes nécessaires dont `drive.appdata`, `response_type=code`, PKCE S256 et `state`. `include_granted_scopes`, `access_type` et `prompt` ont été retirés : l’autorisation incrémentale n’est pas prise en charge dans le flux des apps installées et les clients installés renvoient un jeton durable sans `access_type=offline`. Test unitaire ajouté sur l’URL et ses paramètres.
+
+### Ajustements UI — bouton Google et splash
+
+Le bouton « Se connecter avec Google » reste visible dans le centre de sauvegarde et l’onboarding même sans identifiants OAuth; le message de configuration et le repli Drive synchronisé / hors ligne sont conservés. Le splash natif Android et Flutter est blanc; l’animation du cauri et l’accent terre cuite sont conservés.
+
+---
+
+## Étape 15 — Vitesse, animations, PIN, assistant vocal et sauvegardes (22/11/2026)
+
+### 1. Démarrage plus rapide et animation cochon + cauri (3 s)
+
+| Fichier | Rôle |
+| --- | --- |
+| `lib/core/widgets/cauri_drop.dart` | `CauriDropAnimation` : tirelire **sans cauri** + cauri officiel qui tombe dans la fente, **3 s**, halo et étincelles à l'impact, image finale si les animations sont réduites |
+| `tool/prepare_visual_assets.py` | Détoure le cauri de `akiba_spec/cauris.png` (`assets/brand/cauri.png`, 249×360) et la tirelire seule de l'emblème (`assets/brand/cochon.png`, 377×253), fonds transparents |
+| `lib/features/splash/splash_screen.dart` | Splash unique : `CauriDropAnimation` 3 s ; `SplashGate` passe à 3 s |
+| `lib/core/widgets/savings_celebration.dart` | Versement d'épargne : **exactement** la même animation, 3 s |
+| `lib/main.dart` | Première image immédiate : intégrité, photo chiffrée, Workmanager et préchauffage des logos passent **après** `runApp` |
+
+1. Le démarrage ne bloque plus sur l'initialisation : `runApp` est appelé dès l'ouverture de la base et la lecture des réglages. Les anciens `await` (rappels Workmanager, photo AES par coffre système) sont hors du chemin critique ; le splash de 3 s couvre leur chargement.
+2. Un seul widget d'animation : le geste du démarrage et celui du versement d'épargne sont identiques (cohérence demandée).
+3. Les deux images sont transparentes : lisibles sur le splash blanc comme sur la surface crème de la célébration.
+
+### 2. Transition fin d'onboarding → Dashboard
+
+- Sur E11, le logo passe de 1× à **12×** en 800 ms (`easeInCubic`) et son opacité tombe à **0** : il couvre l'écran puis s'effond ; la coquille arrive ensuite par l'`AnimatedSwitcher` de 450 ms déjà en place.
+- « Réduire les animations » supprime la temporisation avant la bascule.
+
+### 3. Module PIN réellement activé
+
+Trois causes réelles identifiées et corrigées :
+
+1. **Magasin incohérent** : `PinVault` écrivait dans le magasin actif (parfois la simulation) alors que `AkibaSettings.load()` relisait la **base réelle** ; `pinEnabled` restait donc faux. `AkibaSettings.store` expose désormais le magasin des réglages, et le Profil comme l'onboarding y écrivent.
+2. **Onboarding** : après `setPin`, les réglages n'étaient pas relus ; un PIN saisi pendant le parcours d'accueil n'activait jamais le verrou.
+3. **`LockGate`** : `_locked` n'était calculé qu'à `initState`. Il suit maintenant `didUpdateWidget` (PIN activé → verrou immédiat, PIN retiré → accès direct) et verrouille aussi sur `hidden` (Android moderne) en plus de `paused`.
+
+La biométrie reste **optionnelle** : si elle échoue ou si aucun capteur n'existe, le champ PIN et le bouton « Utiliser la biométrie » restent affichés — le PIN fait toujours foi.
+
+### 4. Assistant IA : vocal direct et créances / dettes
+
+- Après la dictée, le **résultat final** déclenche `_analyse()` automatiquement (`unawaited`) : plus de bouton « Analyser » à cliquer.
+- `AiCommandParser` reconnaît désormais :
+  - « Koffi me doit 5 000 », « on me doit 12 000 », « il me doit 3 000 » → **créance** (`owedToMe`), contact extrait ;
+  - « je dois 5 000 à Ama », « je dois rembourser… », « j'ai emprunté… » → **dette** (`iOwe`), contact après « à » ;
+  - si les deux formes coexistent, la **première citée** gagne.
+- Ces phrases ne sont **plus neutres** ni classées en sortie : la carte affiche « Créance · on me doit » ou « Dette · je dois », et « Confirmer » écrit une ligne `debts` **sans mouvement de trésorerie** — donc hors solde disponible, hors budget et hors statistiques (règle AKIBA).
+- L'analyse distante est court-circuitée pour ces phrases : leur sens est local et ne peut pas être contredit par un modèle.
+
+### 5. Google et Home Lab
+
+- **Google** : identifiant nettoyé (espaces/sauts de ligne), URI construite avec `Uri.https` (encodage déterministe), réintroduction de `access_type=offline` + `prompt=consent` pour garantir le **jeton de rafraîchissement** (sans eux, une deuxième connexion n'en renvoie aucun et la sauvegarde échoue juste après une connexion réussie) ; messages dédiés pour `invalid_request`, `unauthorized_client`, `invalid_scope`, `disallowed_useragent`, et message de délai qui nomme le « 400 invalid_request ». Toute erreur affiche le **repli dossier Drive synchronisé** sans bloquer l'application.
+- **Home Lab** : nouveau `BackupService.probeRemote` et bouton « Tester la connexion » (actif dès qu'une URL est saisie) : GET en lecture seule, jeton en en-tête Bearer. Réponses distinctes : joignable + jeton accepté (200/204), joignable sans sauvegarde (404), jeton refusé (401/403), autre code HTTP, certificat refusé, serveur injoignable, délai dépassé.
+
+### 6. Portefeuille > Épargne et Analyses > Budget
+
+- `_SavingsCard` : montants dans un `FittedBox`, actions en `Wrap` (fin du `Spacer` + date sur la même ligne), pastilles raccourcies (`Urgence`, `Objectif`, `Libre`).
+- Correctifs de robustesse induits par les tests 320 px : `AccountBadge` et `_AccountRow` réduisent leurs montants, légende de l'histogramme en `Wrap`, en-tête de `_BudgetCard` en colonne nom + pastille avec un menu unique (Modifier / Supprimer).
+- `LabelIcons.forCategory` : une icône dédiée par catégorie (alimentation, transport, logement, santé, école, loisirs, épargne, factures/services, tontine, salaire, vente, don, autre), insensible aux accents, utilisée dans les plafonds **et** la ventilation.
+
+### Vérifications réellement exécutées (22/11/2026)
+
+| Commande | Résultat |
+| --- | --- |
+| `dart format lib test` | 85 fichiers, 0 changement |
+| `flutter analyze` | **No issues found!** |
+| `flutter test` | **94 tests, tous passés** (dont 14 nouveaux : 5 analyse vocale créances/dettes, 3 PIN, 3 `LockGate`, 2 robustesse 320 px ; 1 test OAuth mis à jour) |
+
+### Ce qui n'est **pas** fait / non vérifié
+
+- Aucune exécution graphique : le splash de 3 s, le zoom de fin d'onboarding et la célébration d'épargne n'ont pas été vus à l'écran.
+- Connexion Google réelle non exercée (identifiants du porteur absents) ; le correctif `invalid_request` repose sur la revue de la requête, pas sur un essai réseau.
+- Serveur Home Lab réel non joint : le bouton de test est vérifié par le code et l'analyse statique seulement.
+- La dictée dépend du moteur de reconnaissance **hors ligne** du téléphone.
+
+## Étape 16 — Visuels, ouverture, verrou et IA multi-fournisseurs (22/11/2026)
+
+### 1. Visuels réparés
+
+| Constat | Correction |
+| --- | --- |
+| `assets/brand/cochon.png` était coupé : la découpe à la ligne 148 de l'emblème tranchait le dos de la tirelire au niveau de la fente | Le cochon vient désormais de `akiba_spec/Logo/preview.png` (tirelire seule, entière, fente comprise), détourée et recadrée : **389×260** |
+| Le retrait du fond se faisait « à la couleur » : tout blanc devenait transparent, y compris l'œil du cochon et les stries internes du cauri | `tool/prepare_visual_assets.py` fait une **diffusion depuis les bords** : seul le blanc relié au bord disparaît, les blancs internes restent blancs. Cauri **252×360** |
+| Le cauri paraissait lourd sur son fond | Même détourage propre ; le cauri reste noir et lisible sur blanc (ouverture) comme sur crème (versement) |
+
+Les deux PNG ont été **ouverts et regardés** après régénération : cochon complet (oreille, dos, fente, œil), cauri entier avec ses stries.
+
+### 2. Ouverture raccourcie : l'animation seule
+
+- `SplashScreen` ne montre plus que `CauriDropAnimation` : plus de titre « AKIBA », plus de phrase d'accroche, plus de barre de progression.
+- `AkibaDurations.splash` passe de **3 s à 1 s** (animation + accès à l'app) ; `SplashGate` suit la même constante. Le versement d'épargne garde ses **3 s** (`AkibaDurations.cauriDrop`).
+- Taille adaptative : `0,52 × plus petit côté`, bornée entre 120 et 200 px, pour ne jamais déborder sur 320 px.
+- L'accès au verrou PIN n'est plus retardé de 3 s.
+
+### 3. Écran rouge à la première saisie du code PIN
+
+L'assertion Flutter (`InheritedElement.notifyClients` : « check that it really is our descendant ») venait du croisement de deux sous-arbres qui gardaient chacun leur champ de saisie et leur focus :
+
+1. l'`AnimatedSwitcher` de la racine faisait coexister `OnboardingFlow` et `LockGate` pendant 450 ms ;
+2. l'`AnimatedSwitcher` du parcours faisait coexister l'étape PIN et l'étape suivante pendant 250 ms.
+
+Les deux croisements sont supprimés : la racine bascule directement (le zoom du logo assure la transition) et le corps d'étape est rendu d'un bloc. Plus de sous-arbre de focus fantôme pendant une notification d'héritage.
+
+### 4. Assistant IA : Gemini, DeepSeek, OpenRouter et Home Lab / Ollama
+
+| Élément | Rôle |
+| --- | --- |
+| `lib/core/ai/ai_provider.dart` | `AiProvider` (identifiant, libellé, adresse et modèle par défaut, clé requise ou non) + `AiProviderSettings` (une URL et un modèle **par fournisseur**, normalisation `http(s)://`, repli sur le défaut) |
+| `lib/core/ai/ai_key_vault.dart` | Coffre **par fournisseur** : `ai_api_key_sealed` pour Gemini (nom historique conservé), `ai_api_key_sealed_<id>` pour les autres ; toujours AES-256-GCM avec clé maîtresse du coffre système |
+| `lib/core/ai/ai_client.dart` | `buildAiProviderCall` (pure) : Gemini natif `:generateContent`, ou `/chat/completions` avec `Authorization: Bearer` **seulement si un jeton existe** ; `extractAiText` lit les deux formats ; `OpenAiCompatibleTransport` ; `fetchAiModels` par fournisseur (Gemini `{models}`, OpenAI `{data}`) |
+| `lib/core/ai/ai_remote.dart` | `resolveAiRemote` : masquage → aucun appel, appels coupés → aucun, adresse invalide ou clé absente (hors Home Lab) → aucun ; sinon configuration prête |
+| `lib/features/assistant/ai_settings_sheet.dart` | Choix explicite du fournisseur, adresse, modèle, clé (facultative pour Ollama), test de connexion, quota et plafond d'essais ; la liste de modèles et la priorité restent propres à Gemini |
+| `lib/features/assistant/assistant_sheet.dart` | Utilise la configuration résolue ; l'indication devient « DeepSeek · deepseek-chat », etc. ; repli local inchangé et silencieux |
+
+Invariants tenus : aucune écriture en base sans confirmation, quota journalier conservé (une unité par analyse, quel que soit le nombre de modèles), **aucun appel réseau quand le masquage est actif**, créances/dettes toujours traitées localement, montants masqués, chiffrement et thèmes inchangés, barre basse non flottante.
+
+### Vérifications réellement exécutées
+
+| Commande | Résultat |
+| --- | --- |
+| `dart format lib test` | 88 fichiers, 0 changement après formatage |
+| `flutter analyze` | **No issues found!** |
+| `flutter test` | **105 tests, tous passés** (11 nouveaux : 5 routage fournisseurs/requêtes/réponses, 5 masquage-adresse-clés, 1 ouverture 320 px) |
+
+### Ce qui n'est pas vérifié
+
+- Aucun appel réel vers DeepSeek, OpenRouter ou une instance Ollama : le poste n'a ni clé ni serveur. Le routage, les en-têtes, les corps de requête et la lecture des deux formats sont testés hors réseau.
+- L'ouverture a été contrôlée par test widget en 320×640 (aucune exception de débordement) et les PNG ont été regardés, mais l'animation n'a pas été vue sur un téléphone.
+- Aucune recette graphique de l'écran de réglages IA sur appareil.
+## Étape 17 — Saisie vocale, PIN et épargne (23/11/2026)
+
+### 1. Saisie vocale : créances et dettes
+
+| Constat | Correction |
+| --- | --- |
+| La dictée française rend souvent les nombres **en lettres** (« trois mille francs ») : `_extractAmount` ne lisait que les chiffres et répondait « je n'ai pas trouvé de montant » | `AiCommandParser` lit désormais les nombres écrits : unités, dizaines, `cent`, `mille`, `million`, pluriels, et le cas `quatre-vingt` (80 et non 24). Garde-fou : le résultat n'est retenu que si la phrase contient un multiplicateur, donc « un café » ne devient jamais 1 FCFA |
+| `_save` exigeait un compte **avant** de traiter une créance ou une dette | Le sens créance/dette est traité en premier : aucune configuration de tiers ni de compte n'est nécessaire |
+| « On me doit 12 000 » enregistrait toute la phrase comme nom de contact | Le champ devient le contact extrait ; à défaut, le texte saisi est nettoyé (chiffres retirés) et une phrase entière retombe sur « Contact », modifiable |
+
+Le sens reste strictement local, quel que soit le fournisseur IA configuré :
+« [Personne] me doit [montant] » produit une créance **On me doit**, « Je dois
+[montant] à [Personne] » une dette **Je dois**, sans sortie d'argent, sans ligne
+neutre et hors solde disponible. L'analyse part automatiquement à la fin de la
+dictée (aucun bouton « Analyser »).
+
+### 2. Limitation des essais de PIN (Étape 2.2)
+
+| Fichier | Rôle |
+| --- | --- |
+| `lib/core/security/pin_attempts.dart` | `PinAttempts` : compteur et échéance dans la table `settings` (base chiffrée), 3 essais libres puis 30 s / 1 min / 2 min / 5 min, `delayFor`, `remainingSeconds`, `registerFailure`, `reset` |
+| `lib/features/splash/splash_screen.dart` | `LockGate` applique le délai : champ et bouton désactivés, compte à rebours à la seconde, message neutre « Trop de tentatives. Nouvel essai dans N s. » (aucun nombre d'essais restants), délai relu au redémarrage |
+| `lib/core/state/akiba_settings.dart` | Clés `pin_failures` et `pin_locked_until` dans les valeurs par défaut |
+
+Aucune donnée n'est effacée et le PIN reste le seul secret vérifié (empreinte
+salée) : la limitation ne fait que ralentir les essais.
+
+### 3. Épargne : proposition de versement et date d'atteinte
+
+| Fichier | Rôle |
+| --- | --- |
+| `lib/core/savings/savings_projection.dart` | `suggestedDeposit` (part 0→30 % du solde, bornée) et `estimateTargetDate` (rythme observé depuis la création du coffre) |
+| `lib/features/portfolio/portfolio_screen.dart` | Carte « Proposition de versement » avec `SegmentedControl` 0/10/20/30 % (réglage `savings_goal_percent`) ; bouton « Proposer X % · montant » dans le dialogue, recalculé sur le compte choisi ; « À ce rythme : jj/mm/aaaa » sur un objectif sans date cible |
+
+Aucun versement automatique : la proposition est un montant pré-rempli, relu et
+modifiable.
+
+### 4. Rappels : reprogrammation au démarrage
+
+`lib/core/notifications/reminder_scheduler.dart` recompose les rappels des sept
+prochains jours à partir des réglages, sans redemander l'autorisation
+(`permission_notifications`, désormais écrit par le Profil) et sans planifier sur
+Windows. `main` l'appelle hors du chemin critique. Aucun message ne contient de
+montant (`sanitize`, `masked: true`).
+
+### Vérifications réellement exécutées
+
+| Commande | Résultat |
+| --- | --- |
+| `dart format lib test` | 93 fichiers, 0 changement après formatage |
+| `flutter analyze` | **No issues found!** |
+| `flutter test` | **119 tests, tous passés** (dont 13 nouveaux dans `test/pin_savings_test.dart`) |
+
+Nouveaux tests : « Guy me doit 3000 fr » → créance `owedToMe` 3 000, contact
+« Guy », jamais une sortie ; « Je dois 3000 fr à Guy » → dette `iOwe` ; dictée en
+lettres (3 000, 12 500, 80 000) ; « un café » sans montant ; délais progressifs
+et persistance du compteur PIN ; proposition bornée 0→30 % ; date d'atteinte.
+
+### Ce qui n'est pas vérifié
+
+- Aucun essai sur téléphone : la dictée dépend du moteur hors ligne de l'appareil
+  et le compte à rebours du PIN n'a pas été vu à l'écran.
+- Aucun build natif (AGP 9 préexistant) : les ressources et le code sont validés
+  par l'analyseur et les tests seulement.
+---
+
+## Étape 18 — Rappels fiables, échéances de dettes, détail des mouvements (23/11/2026)
+
+### 1. Reprogrammation des rappels fiabilisée
+
+| Constat | Correction |
+| --- | --- |
+| `requestPermission` et `cancelAll` pouvaient être appelés **avant** `initialize` : la demande système échoue ou l'annulation ne fait rien, laissant d'anciens rappels programmés | `LocalNotifications.requestPermission` et `cancelAll` appellent désormais `ensureReady()` avant toute action sur le greffon |
+| `ReminderScheduler` planifiait sans garantir l'initialisation | `ensureReady(timezone: settings.timezone)` est appelé **avant** `schedule` et avant la demande d'autorisation |
+| Deux appels dans le même lancement (`main` + `ReminderScheduler`) inscrivaient deux fois la tâche Workmanager (annulation puis réinscription) | `main` ne passe plus que par `ReminderScheduler.reprogram(settings, store: store)` ; `BackgroundReminders` mémorise l'empreinte des réglages déjà inscrits et ne réinscrit que si elle change |
+| Le Profil dupliquait la logique de planification | `ProfileScreen._reschedule` appelle `ReminderScheduler.reprogram(..., requestPermission: true)` ; `_reminderConfig` est supprimé |
+
+### 2. Rappel d'échéance de créance et de dette (Étape 5.6)
+
+| Élément | Détail |
+| --- | --- |
+| `ReminderPlanner.planDebts` | Un rappel par créance/dette **non soldée** à 9 h le jour de l'échéance, dans un horizon de 30 jours ; échéances passées, soldées ou trop lointaines ignorées |
+| Message | Titre « AKIBA · Créance à échéance » / « AKIBA · Dette à échéance », corps neutre sans montant ni nom de contact, `sanitize` appliqué d'office |
+| Réglage | `notif_debt` (activé par défaut) ; sans lui, aucun rappel de dette n'est planifié |
+| Câblage | `ReminderScheduler` charge les dettes du magasin réel et fusionne les rappels par ordre chronologique |
+
+### 3. Détail et reclassement d'un mouvement (Étape 6.2)
+
+| Fichier | Rôle |
+| --- | --- |
+| `lib/data/transaction_reclassifier.dart` | `canReclassify` (seules les entrées/sorties réelles), `categoriesFor` (dépenses ou revenus), `withCategory` (copie qui ne change **que** la catégorie, identifiant conservé) |
+| `lib/features/portfolio/movement_detail_sheet.dart` | Fiche de détail : montant (masqué si besoin), type, compte, date, catégorie, note, nature « argent de tiers », appartenance au budget ; puces de reclassement, « Aucune », explication pour les lignes hors budget ; bouton « Modifier » vers la saisie complète |
+| `lib/features/portfolio/portfolio_screen.dart` | Un appui sur un mouvement ouvre la fiche (au lieu de la saisie directe) ; le reclassement recharge les écrans via `AkibaDataRevision` |
+
+Invariants tenus : aucun montant modifié (écriture remplacée, pas dupliquée), argent de tiers / transferts / épargne / soldes d'ouverture non reclassables et expliqués, masquage respecté, aucune écriture sans action explicite.
+
+### Vérifications réellement exécutées
+
+| Commande | Résultat |
+| --- | --- |
+| `dart format lib test` | 96 fichiers, 0 changement après formatage |
+| `flutter analyze` | **No issues found!** |
+| `flutter test` | **125 tests, tous passés** (6 nouveaux : 2 sur les échéances, 3 sur le reclassement, 1 widget sur la fiche) |
+
+### Ce qui n'est pas vérifié
+
+- Aucune notification réellement livrée : le greffon n'est pas initialisé hors appareil.
+- La fiche n'a pas été vue à l'écran (test widget seulement, 360 px implicite).
+- Aucun build natif (configuration AGP 9 préexistante).
+
+---
+
+## Étape 19 — Configuration Google OAuth chargée automatiquement (23/11/2026)
+
+### 1. Le problème réel
+
+`--dart-define-from-file=secrets/google_oauth.json` n'a pas d'équivalent « par
+défaut » dans Flutter : chaque `flutter run`, chaque `flutter build` et chaque
+lancement depuis un IDE devait le répéter. Oublié, l'application démarrait avec
+un `clientId` vide, donc sans connexion Google — et un `client_id=` vide dans la
+requête d'autorisation est une cause directe de « 400 invalid_request ».
+
+### 2. Mécanisme livré
+
+| Fichier | Rôle |
+| --- | --- |
+| `tool/sync_oauth_secrets.dart` | Copie `secrets/google_oauth.json` (jamais versionné) vers `assets/config/google_oauth.json` ; refuse un identifiant vide ou qui ne finit pas par `.apps.googleusercontent.com` (et supprime alors la copie), n'affiche jamais l'identifiant en entier, ne réécrit rien si la cible est déjà à jour |
+| `assets/config/` | Dossier suivi grâce à `.gitkeep`, fichier ignoré : la copie est **embarquée au build**, donc disponible sur Android et iOS où `secrets/` n'existe pas |
+| `lib/core/config/google_oauth_config.dart` | `load()` idempotent et jamais bloquant : `--dart-define`, puis `secrets/google_oauth.json` (développement sur ordinateur, dossier courant), puis la copie embarquée ; identifiant toujours nettoyé (`trim`) |
+| `lib/main.dart` | `await GoogleOAuthConfig.load()` après `ensureInitialized()`, avant la base et l'interface |
+| `lib/core/backup/google_drive_backup.dart` | `signIn()` recharge la configuration si nécessaire : un écran monté seul ne dépend plus de l'ordre de démarrage |
+| `pubspec.yaml`, `.gitignore` | `assets/config/` déclaré dans les assets ; `/assets/config/google_oauth.json` ignoré par Git |
+
+Un simple `flutter run` (Android, Windows, iOS) charge donc la configuration.
+`--dart-define` reste prioritaire pour un essai ponctuel ou une CI. Après
+rotation de l'identifiant, une seule commande rafraîchit la copie :
+`dart run tool/sync_oauth_secrets.dart`. Sans fichier source, le script supprime
+la copie embarquée : jamais d'identifiant périmé livré par erreur.
+
+### 3. Relecture des deux fichiers OAuth (cause du « 400 invalid_request »)
+
+| Point | Constat | Correction |
+| --- | --- | --- |
+| Encodage du `scope` | `Uri.https(..., queryParameters:)` encode l'espace en `+`, forme ambiguë pour Google | Chaîne de requête construite avec `Uri.encodeComponent` : espaces en `%20`, la forme documentée |
+| `client_id` vide | Il était émis tel quel (`client_id=`) quand aucun identifiant n'était chargé → `invalid_request` « Missing required parameter » | Les valeurs vides ne sont plus émises ; `signIn()` refuse proprement avant d'ouvrir le navigateur, avec la marche à suivre |
+| Paramètres | `access_type=offline` + `prompt=consent` conservés (sans eux, aucun jeton de rafraîchissement) ; `include_granted_scopes` toujours absent | Inchangé |
+| `redirect_uri` | `http://127.0.0.1:<port>`, sans chemin : forme documentée pour les applications installées, réutilisée à l'identique pour l'échange du code | Inchangé, désormais testé valeur par valeur |
+| Android | Google **déprécie la redirection de boucle locale pour les applications mobiles** (clients Android/iOS) ; AKIBA utilise un client « Application de bureau », la seule forme qui la conserve. Le message d'erreur nomme maintenant cette cause | `_explain('invalid_request')` réécrit |
+| Ouverture du navigateur | `url_launcher` exige `<queries><intent VIEW/></queries>` sur Android 11+ ; sans elle la page d'autorisation ne s'ouvre jamais | Déclaration ajoutée au manifeste |
+| Repli conservé | Sans identifiant, la connexion est refusée avec un message explicite ; le dossier Drive synchronisé et le mode hors ligne restent le chemin normal | Inchangé, textes mis à jour (`GoogleOAuthConfig.setupHint`) |
+
+Aucun secret n'entre dans le code suivi : l'identifiant ne vit que dans
+`secrets/` et dans la copie `assets/`, toutes deux ignorées par Git. La copie est
+en revanche embarquée dans l'APK — normal pour un identifiant OAuth, mais elle ne
+doit jamais contenir un vrai secret (le client AKIBA n'en a pas ; le script le
+rappelle à chaque exécution).
+
+### Vérifications réellement exécutées
+
+| Commande | Résultat |
+| --- | --- |
+| `dart run tool/sync_oauth_secrets.dart` | Copie écrite (`9543178840…rcontent.com`), code retour 0, fichier confirmé ignoré par `git check-ignore` |
+| `dart format lib test tool` | 97 fichiers, 3 reformatés, relance sans changement |
+| `flutter analyze` | **No issues found!** |
+| `flutter test` | **128 tests, tous passés** (3 nouveaux : `%20` et aucun `+`, redirection exacte, chargement puis nettoyage des identifiants, y compris fichier absent) |
+
+### Ce qui n'est pas vérifié
+
+- Aucune connexion Google réelle : ni le consentement, ni le retour du
+  navigateur, ni l'échange du code n'ont été exercés depuis un téléphone.
+- Rien dans le code ne peut garantir le comportement de Google vis-à-vis de la
+  boucle locale depuis Android : la dépréciation est côté Google, d'où le repli.
+- Aucun build natif (configuration AGP 9 préexistante) : la copie embarquée est
+  prouvée par les tests (asset déclaré et lisible) mais pas par un APK installé.
+
+---
+
+## Étape 20 — Relecture de l'Étape 19, copie OAuth automatique et connexion Android `google_sign_in` (23/11/2026)
+
+### 1. Ce qui a été simplifié dans l'Étape 19
+
+| Avant | Après |
+| --- | --- |
+| `clientIdPlaceholder` / `clientSecretPlaceholder` toujours vides, jamais utiles | Supprimés : l'identifiant ne vient que de `--dart-define`, de `secrets/` ou de la copie embarquée |
+| `isLoaded` + relecture conditionnelle (état statique à maintenir) | `load()` relit simplement la configuration ; c'est `GoogleDriveService.signIn()` qui ne relit le disque que si rien n'est chargé |
+| Constante `redirectPath` recopiée dans les tests | Chemin `/` écrit une fois, dans l'écouteur |
+| `GoogleAuthException` dans `google_drive_backup.dart` | Déplacée dans `google_auth_exception.dart` (partagée par les deux flux) et ré-exportée : aucun import à changer ailleurs |
+| `FlutterSecureStorage` exposé par le service | `GoogleTokenVault` (3 opérations) : `SecureGoogleTokenVault` en production, coffre mémoire dans les tests |
+| Script `tool/sync_oauth_secrets.dart` limité à deux clés | Il transporte aussi `AKIBA_GOOGLE_ANDROID_SERVER_CLIENT_ID` et rappelle qu'il n'a plus à être lancé à la main |
+
+### 2. Génération de `assets/config/google_oauth.json` réellement automatique
+
+| Mécanisme | Quand | Effet |
+| --- | --- | --- |
+| Tâche Gradle `syncOAuthSecrets` (`android/app/build.gradle.kts`) | Avant chaque `flutter run` / `flutter build` Android (`preBuild`, donc avant `compileFlutterBuildDebug`) | Exécute le script ; `isIgnoreExitValue` et `cmd /c … & exit 0` / `sh -c … || true` garantissent qu'un échec ne bloque jamais la build |
+| `dart run tool/sync_oauth_secrets.dart` | Ponctuel | Reste disponible pour forcer une copie ou diagnostiquer un identifiant refusé |
+
+**Une seule voie** : sur ordinateur l'application lit directement
+`secrets/google_oauth.json` et n'a jamais besoin de la copie ; seul le build
+Android peut l'embarquer. La copie au démarrage de la première version de
+l'Étape 20 a été retirée (voir §5). Aucun secret n'entre dans Git :
+`git check-ignore` confirme `/secrets/` et `/assets/config/google_oauth.json`,
+tandis que `assets/config/.gitkeep` garde le dossier suivi.
+
+### 3. Connexion Google Android via `google_sign_in`
+
+| Fichier | Rôle |
+| --- | --- |
+| `lib/core/backup/google_android_auth.dart` | `GoogleAndroidAuth` (contrat testable) + `GoogleSignInAndroidAuth` : `initialize(serverClientId:)`, `authenticate(scopeHint: driveScopes)`, `authorizationForScopes` puis `authorizeScopes` pour obtenir le jeton Drive, `attemptLightweightAuthentication` pour la reconnexion silencieuse, `disconnect` pour la révocation |
+| `lib/core/backup/google_drive_backup.dart` | `signIn()` choisit la branche (`Platform.isAndroid`, injectable) : Android → `google_sign_in` sans navigateur, sans `client_secret`, sans boucle locale ; ailleurs → flux PKCE inchangé. Le renouvellement se déduit du coffre : jeton de rafraîchissement présent = flux de bureau, absent = session Android renouvelée par Play services |
+| `lib/core/config/google_oauth_config.dart` | `androidServerClientId` (client « Application Web »), `isAndroidReady`, `canSignIn` (voie de la plateforme courante), `driveScopes`, `androidHint` (package `com.akiba.app`, empreinte SHA-1, utilisateurs test) |
+| `lib/features/backup/backup_center.dart` | Le bouton « Se connecter avec Google » apparaît dès que la voie de la plateforme est configurée (`canSignIn`) |
+| `lib/features/onboarding/onboarding_flow.dart` | E7 accepte aussi la configuration Android |
+| `pubspec.yaml` | `google_sign_in: ^7.2.0` |
+
+Points de conception :
+
+1. **Le jeton Drive vient du périmètre `drive.appdata`** demandé à
+   `authorizationClient` : l'authentification seule ne donne aucun accès aux
+   fichiers. Le flux de bureau continue d'utiliser `openid`, `email` et la même
+   portée Drive.
+2. **Aucun jeton durable sur Android** : Play services renouvelle le jeton
+   d'accès ; seule l'adresse du compte est écrite dans le coffre système. Le
+   jeton d'accès reste en mémoire, avec une validité de 50 min (Google en accorde
+   une heure).
+3. **Cohérence du package** : le client OAuth Android doit être créé pour
+   `applicationId` = **`com.akiba.app`** (le `namespace` Gradle reste
+   `com.example.akiba`, il ne conditionne pas l'enregistrement) avec l'empreinte
+   SHA-1 de la clé de signature. Le `serverClientId` transmis est celui du client
+   « Application Web » — un client de bureau ne peut pas servir de
+   `serverClientId`.
+4. **Erreurs nommées** : `canceled` (repli dossier synchronisé), `uiUnavailable`,
+   `client/providerConfigurationError` et `unknownError` renvoient vers la
+   configuration Cloud Console (package, SHA-1, compte testeur, portée
+   `drive.appdata`) ; aucun message ne contient de jeton.
+5. **Repli intact** : échec ou annulation → `GoogleAuthException`, l'application
+   n'est jamais bloquée et la sauvegarde AES-256-GCM vers le dossier Drive
+   synchronisé reste le chemin normal. Aucune écriture comptable, aucun montant
+   dans les messages.
+
+### 4. Tests
+
+| Fichier | Nouveaux tests |
+| --- | --- |
+| `test/google_android_auth_test.dart` | 5 tests — jeton Drive obtenu sans jeton de rafraîchissement ; refus sans `serverClientId` (message avec package + SHA-1) ; refus du greffon propagé sans session ni coffre ; déconnexion qui révoque et vide le coffre ; branche ordinateur qui n'appelle jamais `google_sign_in` |
+| `test/core_test.dart` | Mise à jour : les assertions sur `isLoaded` et `redirectPath` (supprimés) disparaissent, le reste de la requête OAuth est inchangé |
+
+### Vérifications réellement exécutées
+
+| Commande | Résultat |
+| --- | --- |
+| `dart format lib test tool` | 101 fichiers, 0 changement à la relance |
+| `flutter analyze` | **No issues found!** |
+| `flutter test` | **133 tests, tous passés** |
+| `dart run tool/sync_oauth_secrets.dart` | « déjà à jour », code retour 0 |
+| `./gradlew :app:assembleDebug` | **BUILD SUCCESSFUL in 7m 22s** (premier build), APK produite ; `syncOAuthSecrets` exécutée avant `compileFlutterBuildDebug`, `assets/flutter_assets/assets/config/google_oauth.json` présent dans l'APK |
+| `git check-ignore -v` | `/secrets/` et `/assets/config/google_oauth.json` ignorés |
+
+### 5. Relecture de l'Étape 20 (23/11/2026)
+
+| Simplification | Raison |
+| --- | --- |
+| Copie au démarrage (`load()` → `syncCopy`) et `copyNotice` supprimés | Doublon du hook Gradle : sur ordinateur la copie n'est jamais relue (le fichier `secrets/` gagne), et sur Android seul le build peut l'embarquer. Le hook s'exécute **avant** `compileFlutterBuildDebug`. `GoogleOAuthConfig` ne fait plus que lire |
+| Clé de coffre `akiba_google_auth_mode` supprimée | Information déjà portée par le jeton de rafraîchissement : présent = flux de bureau, absent = session Android |
+| Champ `GoogleSession.refreshToken` supprimé | Jamais lu après construction |
+| `_signInAndroid()` n'ajoute plus `setupHint` | Message utile sur ordinateur seulement ; `androidHint` dit déjà quoi faire |
+| Message `clientConfigurationError` raccourci | Il répétait mot pour mot `androidHint` |
+| `GoogleOAuthConfig.canSignIn` ajouté | Le centre de sauvegarde et l'onboarding annonçaient « identifiants prêts » sur Android avec un client de bureau, qui ne peut pas servir de `serverClientId` |
+
+Build Android : l'échec observé venait d'une **interruption manuelle** pendant la
+première compilation (7 min de greffons natifs), pas du code. Une fois menée à
+terme, `assembleDebug` réussit et l'APK contient la copie embarquée.
+
+### Ce qui n'est pas vérifié
+
+- **Aucune connexion Google réelle** : ni `google_sign_in` sur appareil, ni le
+  consentement, ni le jeton Drive. Aucun compte testeur, aucune empreinte SHA-1
+  enregistrée.
+- **Application non lancée sur appareil** : l'APK est produite, mais ni
+  l'installation sur le téléphone (`adb`) ni le parcours de connexion Google
+  n'ont été exercés.
+- **SHA-1 du poste non enregistré** : l'empreinte doit être ajoutée côté Google
+  Cloud Console par le porteur, avec le client « Application Web ».
+
+---
+
+## Étape 21 — Relève de l'empreinte SHA-1 et procédure Android (24/11/2026)
+
+### 1. Outil `tool/debug_sha1.dart`
+
+L'empreinte SHA-1 était le seul élément de la configuration Google à exiger une
+commande `keytool` tapée à la main (chemin du magasin, mot de passe, alias,
+libellé parfois traduit). L'outil la relève en une commande.
+
+| Aspect | Détail |
+| --- | --- |
+| Commande | `dart run tool/debug_sha1.dart` |
+| Source | `~/.android/debug.keystore`, alias `androiddebugkey`, mot de passe `android` (défauts de Gradle) |
+| Sortie | source, `SHA-1` avec deux-points, package `com.akiba.app`, puis le rappel du client OAuth « Android » |
+| Options | `--keystore`, `--alias`, `--storepass`, `--keytool`, `-h` |
+| Dépendances | aucune : `keytool` du JDK (JAVA_HOME, PATH, ou JDK d'Android Studio) |
+| Langue | forcée en anglais (`-J-Duser.language=en`) pour que le libellé `SHA1:` ne dépende pas du poste ; les deux formes `SHA1:` / `SHA-1 :` sont lues |
+| Sécurité | lecture seule ; l'empreinte d'un certificat n'est pas un secret, aucun mot de passe n'est affiché |
+| Erreurs nommées | magasin absent (build debug à lancer), mot de passe différent, `keytool` introuvable, alias vide |
+
+Un mode `--apk` a été écrit puis **retiré** : `keytool -printcert -jarfile` ne
+lit que les signatures JAR v1, absentes des APK Flutter signés en v2/v3 ; il
+répondait « Aucune empreinte trouvée » sur un APK valide. La commande correcte
+pour un APK signé par une autre clé (`apksigner verify --print-certs`) est
+documentée dans la procédure.
+
+### 2. Procédure `akiba_spec/activer_connexion_google_android.md`
+
+Sept étapes et un dépannage, avec les libellés actuels de la console (Google
+Auth Platform → Clients / Audience / Data Access) :
+
+| Étape | Contenu |
+| --- | --- |
+| 1 | Relever l'empreinte (`dart run tool/debug_sha1.dart`), cas `apksigner`, empreinte propre à chaque poste |
+| 2 | Projet Google Cloud et activation de l'API Google Drive |
+| 3 | Écran de consentement : Audience **Externe / Testing**, **utilisateurs test** (sans eux : `access_denied`), portée `drive.appdata` uniquement |
+| 4 | Client **Android** : package `com.akiba.app` (jamais le `namespace` `com.example.akiba`) + SHA-1 ; aucun fichier à télécharger |
+| 5 | Client **Application Web** sans origine ni redirection, ID seul vers `AKIBA_GOOGLE_ANDROID_SERVER_CLIENT_ID` ; secret non recopié ; JSON complet |
+| 6 | Copie embarquée (tâche Gradle `syncOAuthSecrets`, commande ponctuelle), build et `adb install -r`, cas `INSTALL_FAILED_UPDATE_INCOMPATIBLE` |
+| 7 | Essai réel : compte test, jeton Drive, sauvegarde visible, repli hors ligne |
+| Dépannage | `DEVELOPER_ERROR` (package/SHA-1/projet/propagation), autre clé de signature, `access_denied`, 403 de portée, `canSignIn` faux, compte déjà connecté, copie périmée |
+
+Le document remplace les renvois vagues (« à enregistrer côté Cloud Console »)
+de `RESTE_A_FAIRE.md` (Étape 20) et de
+`regles_themes_et_identifiants_google.md` §2, mis à jour avec la troisième clé
+du JSON. La numérotation de cette section (7 avant 5) est corrigée au passage.
+
+### Vérifications réellement exécutées
+
+| Commande | Résultat |
+| --- | --- |
+| `dart run tool/debug_sha1.dart` | exit 0, empreinte `F7:4C:…:DB:80` lue dans `C:\Users\amahp\.android\debug.keystore` |
+| `dart run tool/debug_sha1.dart --help` | exit 0, aide affichée |
+| `dart run tool/debug_sha1.dart --nope` | une ligne « option inconnue » puis l'aide, aucun plantage |
+| `dart format lib test tool` | 102 fichiers, **0 changement** |
+| `flutter analyze` | **No issues found!** (183,9 s) |
+
+### Ce qui n'est pas vérifié
+
+- Aucun client OAuth Android ni « Application Web » n'a été créé : la procédure
+  n'a pas été déroulée dans la console par l'assistant.
+- Aucune connexion Google réelle ni aucune sauvegarde Drive.
+- Aucun compte testeur ajouté, aucun appareil `adb` connecté.
+
+---
+
+## Étape 22 — Langue immédiate, permissions réelles, Home Lab, cycle de vie, règlements et solde en direct (24/11/2026)
+
+### 1. Langue de l'onboarding
+
+- Cause : l'onboarding écrivait `settings.set('language', …)` ; les globales
+  (`AkibaL10n`, `AkibaDate`) n'étaient resynchronisées que par le `builder`
+  racine, et l'habillage du parcours restait en français — la sélection
+  semblait sans effet.
+- Correctif : `AkibaSettings.setLanguage` normalise, applique `AkibaL10n` et
+  `AkibaDate` **avant** `set()` (qui notifie), et `notifyListeners` resynchronise
+  aussi la langue. L'onboarding passe par ce chemin, et son habillage est
+  traduit : titre « Votre langue / Your language », note explicative, boutons
+  « Retour / Continue / Enter AKIBA », compteur d'étape, en-têtes de thème.
+- Résultat : choisir « English » à E1 bascule immédiatement l'onboarding, la
+  navigation, l'accueil et le Profil ; le réglage reste enregistré.
+
+### 2. Permissions des rappels (matin / midi / soir)
+
+- `LocalNotifications.permissionGranted()` lit l'état réel
+  (`areNotificationsEnabled()` sur Android 13+, `checkPermissions()` sur
+  iOS/macOS) sans ouvrir de fenêtre.
+- `requestPermission()` relit l'état après la demande : un `null` de certaines
+  versions ne devient plus « refusé ».
+- L'onboarding : lecture → demande → **relecture**, garde de ré-entrance
+  (l'interrupteur est désactivé pendant la demande), message seulement en cas
+  de refus réel, bouton « Ouvrir les réglages système » (`openAppSettings`) si
+  le refus est définitif, et message honnête sur Windows (pas de livraison
+  système) au lieu de « autorisation refusée ».
+- `ReminderScheduler` ne se fie plus au seul drapeau `permission_notifications`
+  périmé : l'état système fait foi, et un accord réel remet le drapeau à jour.
+  Le Profil distingue « non autorisé » de « planification indisponible ».
+
+### 3. Test de connexion Home Lab
+
+- `BackupService.normalizeUrl` : accepte `192.168.1.80`, `192.168.1.80:8080`,
+  `akiba.local`, et les URL complètes ; ajoute `http://` quand le schéma manque,
+  refuse les adresses vides ou sans hôte, et rejette toujours les schémas autres
+  que http/https.
+- `probeRemote` : délai de connexion 8 s, en-têtes `Accept` et `User-Agent`,
+  distinction **port fermé** / **nom introuvable** / **pas de route** /
+  certificat refusé / délai / autre code HTTP, et message dédié pour une
+  connexion interrompue.
+- Le centre de sauvegarde valide l'adresse **avant** l'appel réseau, enregistre
+  l'adresse normalisée et teste exactement celle-là ; le texte d'aide explique
+  qu'une IP seule suffit.
+
+### 4. Assertions Flutter (débordements de Dropdown et sortie d'écran)
+
+- `DropdownButton` : les valeurs `timezone` / `dateStyle` inconnues (restauration,
+  ancienne version) sont ajoutées à la liste — Profil et onboarding ; la
+  catégorie de l'assistant est toujours ramenée à la liste courante ; les comptes
+  sont dédupliqués ; une ligne SMS qui pointe un compte disparu retombe sur le
+  premier.
+- `framework.dart` « check that it really is our descendant » : l'assistant
+  capturait `Navigator.of(context)` **après** `pop()` pour afficher la fête
+  d'épargne et les bandeaux de confirmation. Le navigateur et le messager sont
+  maintenant pris avant `pop()`, la fête s'affiche sur le navigateur, `_say` des
+  paramètres IA vérifie `mounted`, et les `catch` ne font plus `setState` après
+  fermeture.
+
+### 5. Règlement des créances et des dettes
+
+- Nouvelle opération `AkibaStore.settleDebt` (SQLite chiffré, simulation, repli
+  vide) : une **créance encaissée** crée une entrée `+montant` sur le compte
+  choisi ; une **dette payée** crée une sortie `−montant` du compte choisi. Le
+  montant est borné au reste dû et le reste dû est mis à jour dans la même
+  opération. Catégories explicites `Créance` / `Dette`, `isNeutral: false`.
+- Portefeuille : « Régler » demande désormais **le compte** (en plus du montant),
+  avec un texte adapté (« L'encaissement entre sur le compte choisi », « Le
+  paiement sort du compte choisi »), et l'annulation supprime le mouvement puis
+  restaure la dette.
+- Assistant : quand la phrase décrit une créance ou une dette, un bouton « Cette
+  créance a été encaissée » / « Cette dette a été payée » ouvre le mode
+  règlement, liste les lignes ouvertes du même sens (reste dû masqué si
+  masquage), préremplit le montant et le contact, et demande le compte.
+- Une créance ou une dette **ouverte** reste hors du solde disponible : seule
+  son encaissement ou son paiement déplace de l'argent.
+
+### 6. Solde de l'accueil en temps réel et déconnexion
+
+- **Cause réelle du solde figé** : `DashboardScreen._reload` faisait
+  `setState(() => _snapshot = store.loadDashboard())`. Le callback rendait un
+  `Future`, ce que Flutter refuse (« setState() callback argument returned a
+  Future ») : la relance était rejetée à chaque `revision.bump()`. Le même
+  défaut existait dans Analyses et Portefeuille.
+- Correctif : le `Future` est créé hors de `setState`, puis affecté dans un bloc
+  synchrone ; `_refresh` fait de même. Un test widget vérifie qu'une entrée, une
+  dépense puis un règlement changent le solde affiché **sans changer d'onglet**.
+- Profil → Sauvegarde : nouveau bouton « Se déconnecter » avec confirmation.
+  `GoogleDriveService.signOut` supprime le jeton de rafraîchissement et l'e-mail
+  du coffre système (`disconnect` sur Android), `google_linked` repasse à faux ;
+  les données locales chiffrées ne sont jamais supprimées.
+
+### Vérifications réellement exécutées
+
+| Commande | Résultat |
+| --- | --- |
+| `dart format lib test` | 101 fichiers, **0 changement** |
+| `flutter analyze` | **No issues found!** (21,1 s) |
+| `flutter test` | **139 tests, tous passés** (133 → 139, `test/fixes_test.dart`) |
+
+Nouveaux tests : globales de langue avant notification, bascule réelle de
+l'onboarding (« Your language », « Continue », plus de « Votre langue »),
+créance encaissée (+5 000 sur le solde), dette payée (−2 000 puis annulation),
+règlement borné au reste dû, solde de l'accueil actualisé après entrée, dépense
+et règlement.
+
+Invariants tenus : chiffrement AES-256 (SQLCipher) et AES-256-GCM inchangés,
+argent de tiers toujours isolé (`isNeutral` explicite), masquage respecté dans
+les nouveaux libellés, cinq thèmes et barre basse non flottante non modifiés,
+aucun serveur maître, aucun secret versionné.
+
+### Ce qui n'est pas vérifié
+
+- Aucun appareil Android connecté : permission accordée/refusée réellement,
+  livraison des rappels, `openAppSettings`, déconnexion Google et Home Lab sur un
+  vrai Wi-Fi n'ont pas été exercés.
+- Les écrans métier détaillés restent en français (Analyses, Portefeuille,
+  saisie rapide) : la traduction couvre navigation, accueil, Profil et
+  l'habillage de l'onboarding.
+- Aucun contrôle visuel des nouveaux boutons (règlement dans l'assistant,
+  déconnexion) : seul l'analyseur et les tests widget sont passés.
+
+---
+
+## Étape 23 — Bienvenue après onboarding et SMS financiers détectés en arrière-plan (24/11/2026)
+
+### 1. Notification de bienvenue
+
+- `AppNotifications.welcome` (nouveau fichier
+  `lib/core/notifications/app_notifications.dart`) n'envoie la bienvenue que si
+  `permission_notifications` est enregistré **et** si le système autorise
+  réellement (`LocalNotifications.show` relit l'état).
+- Déclenchement à la dernière étape de l'onboarding, juste après
+  `onboarding_done`, sans bloquer l'entrée dans l'application
+  (`unawaited`).
+- Texte dans la langue active, **sans aucun montant** :
+  « Bienvenue dans AKIBA — Votre espace est prêt. Touchez le cochon pour
+  enregistrer votre première ligne ; vos chiffres restent privés et chiffrés. »
+  (version anglaise équivalente).
+- Canal Android dédié `akiba_accueil` (« AKIBA »), notification ponctuelle
+  (pas de planification). Sur Windows, rien n'est affiché : l'application ne
+  prétend pas le contraire.
+
+### 2. Détection SMS Flooz / Mixx by Yas / banques, application fermée
+
+| Élément | Détail |
+| --- | --- |
+| Récepteur | `android/.../SmsReceiver.kt` : `Telephony.Sms.Intents.getMessagesFromIntent`, concaténation des SMS multipart, filtre opérateur/banque + devise + montant |
+| Protection | `android:permission="android.permission.BROADCAST_SMS"`, `exported="true"`, priorité 999 : aucune application tierce ne peut simuler un SMS financier |
+| Permissions | `READ_SMS` (déjà) + `RECEIVE_SMS` (nouveau) ; demandées à l'activation dans l'onboarding **et** depuis le Profil (nouveau bouton « Activer la détection ») |
+| Notification | Canal `akiba_sms`, texte fixe « Nouveau SMS financier — Touchez pour vérifier et confirmer l'opération. » : **aucun montant**, donc masquage respecté par construction |
+| Transport | Le texte voyage dans l'`Intent` du `PendingIntent` (extrait retiré après lecture) : aucun fichier, aucune préférence, aucune base |
+| Pont Flutter | `MainActivity` expose `akiba/sms` (`consumePendingSms`) et `akiba/sms_events` ; `lib/core/sms/sms_bridge.dart` les consomme |
+| Ouverture | `AkibaShell` : au démarrage (application fermée) et sur événement (application en arrière-plan), filtre `SmsDetector.isFinancialSms`, analyse `SmsParser`, puis ouvre la **saisie rapide préremplie** |
+| Préremplissage | `SmsEntryIntent` : montant, sens (entrée/sortie), support (`flooz`, `mixxByYas`, `orabank`), contact et référence ; le compte du support est présélectionné ; bandeau « Prérempli depuis un SMS · vérifiez puis confirmez. » |
+| Écriture | Toujours après le bouton « Enregistrer » : test widget vérifiant base vide avant, une ligne après |
+
+Analyse étendue (`SmsParser`) :
+
+- sources : Flooz/Moov, Mixx/Yas, **Orabank** et banques (`bank`, `banque`,
+  BOA, Ecobank, Coris, NSIA, UBS, BSIC, Attijari, Société Générale, SGC…) avec
+  le libellé générique « Banque » quand le nom exact n'est pas connu ;
+- montants : `FCFA`, `XOF`, `CFA` et **`F CFA`** espacé ;
+- sens : dépôt/crédit/crédité/virement reçu/remboursement → entrée ;
+  retrait/débit/débité/prélèvement/chèque/paiement/achat/DAB/commission →
+  sortie ;
+- `SmsDetector.isFinancialSms` : source connue **et** montant exploitable,
+  utilisé par le pont avant toute ouverture.
+
+### 3. Vérifier sur l'appareil
+
+```bash
+# 1. Autoriser : Onboarding E8 ou Profil → SMS financiers → Activer la détection
+adb shell dumpsys package com.akiba.app | grep -E "READ_SMS|RECEIVE_SMS|POST_NOTIFICATIONS"
+
+# 2. Logs de l'application (aucun montant n'y est journalisé)
+adb logcat -c && adb logcat -s flutter
+
+# 3. Émulateur : envoyer un vrai SMS système, application fermée
+adb emu sms send 12345 "Flooz: Vous avez recu 25000 FCFA de KOFFI Ama. Ref FL8842."
+adb emu sms send 12345 "Orabank: Debit de 12000 FCFA - PAIEMENT CARTE."
+adb emu sms send 12345 "Mixx by Yas: Paiement de 3500 FCFA effectue chez ALIMENTATION."
+
+# 4. Appareil physique : envoyer le SMS depuis un second téléphone.
+#    `adb shell am broadcast` est volontairement refusé (protection BROADCAST_SMS).
+
+# 5. Constater la notification puis toucher : la fiche s'ouvre préremplie
+adb shell dumpsys notification --noredact | grep -A 8 akiba_sms
+```
+
+Attendu : notification « Nouveau SMS financier » (sans montant), ouverture de
+la saisie rapide avec montant, sens et compte Orabank/Flooz/Mixx présélectionné,
+et aucune écriture avant « Enregistrer ». Un SMS ordinaire ne produit rien.
+
+### Vérifications réellement exécutées
+
+| Commande | Résultat |
+| --- | --- |
+| `dart format lib test` | 105 fichiers, 0 changement après formatage |
+| `flutter analyze` | **No issues found!** |
+| `flutter test` | **149 tests, tous passés** (139 → 149, `test/sms_welcome_test.dart`) |
+| `./gradlew :app:compileDebugKotlin` | **BUILD SUCCESSFUL in 3m 53s** : nouveau récepteur, `MainActivity` et manifeste compilés (app + plugins) |
+
+Nouveaux tests : dépôt Orabank (entrée, support `orabank`), retrait/paiement
+Orabank (sortie), banque générique, `F CFA` espacé, Flooz et Mixx by Yas
+(supports et sens), message non financier ignoré, bienvenue refusée sans
+permission / envoyée sans aucun chiffre et dans la langue choisie, et fiche
+préremplie sans écriture avant confirmation.
+
+Invariants tenus : aucune écriture automatique, chiffrement AES-256 (SQLCipher)
+et AES-256-GCM inchangés, aucun montant dans une notification, argent de tiers
+et créances/dettes inchangés, cinq thèmes, Home Lab seul, barre basse non
+flottante.
+
+### Ce qui n'est pas vérifié
+
+- Le code Kotlin **compile** (`:app:compileDebugKotlin`), mais l'APK complète
+  n'a pas été réassemblée et aucun appareil `adb` n'est connecté : le
+  manifeste fusionné, l'installation et le parcours réel restent à vérifier par
+  `flutter build apk --debug` puis `adb install -r`.
+- Aucun SMS réel reçu sur un téléphone : le parcours notification → fiche n'est
+  couvert que par les tests Dart et la lecture de code.
+- Aucun contrôle visuel du bandeau de préremplissage ni de la notification.
+
+---
+
+## Étape 24 — Rapport mensuel PDF, avis IA, prévisualisation et envoi (24/11/2026)
+
+### 1. Ce qui est livré
+
+| Élément | Détail |
+| --- | --- |
+| Modèle de rapport | `lib/core/report/monthly_report.dart` : période (mois en cours, mois dernier, 30 derniers jours), entrées/sorties/solde, catégories, comptes, épargne, argent de tiers, créances/dettes, réserve de sécurité, six derniers mois |
+| Règle des montants | **Toujours en clair** dans le rapport et le PDF : aucune lecture de `MaskedAmounts`, aucun `masked: true` dans le document. Le masquage global reste actif partout ailleurs |
+| Isolation | Les entrées/sorties viennent de `categoryTotals` (tiers et épargne exclus par SQL) ; l'argent de tiers, l'épargne et les créances/dettes sont affichés dans des blocs **séparés** et jamais additionnés aux revenus |
+| Avis IA | `ReportAdvisor` : trois conseils locaux déterministes (FR/EN) puis enrichissement optionnel par l'IA configurée (`AiTask.analysis`, quota journalier, cascade). Repli local instantané sans clé, hors ligne, quota atteint, erreur ou réponse illisible |
+| PDF | `lib/core/report/report_pdf.dart` : logo embarqué (`akiba_mark_light/dark` selon le fond), en-tête AKIBA, période, indicateurs, détails catégories/comptes, épargne, **argent de tiers isolé**, créances/dettes, graphiques six mois, puis **avis et conseils de l'assistant** ; couleurs et langue du thème actif |
+| Prévisualisation | `lib/features/report/report_preview.dart` : pages PDF rendues dans l'app (`PdfPreview`) + actions Email, WhatsApp et partage système avec le PDF en pièce jointe |
+| Paramètres | Tuile « Rapport mensuel » : période, interrupteur données de simulation, destinataire Email, numéro WhatsApp, fin de mois, copie Home Lab, bouton « Générer et prévisualiser », date du dernier rapport |
+| Fin de mois | `ReportScheduler` : au premier lancement d'un nouveau mois, si l'option est active, génère le rapport du mois écoulé, l'enregistre dans le dossier privé et affiche une notification **sans montant** |
+| Home Lab | `ReportScheduler.sendToHomeLab` : PUT JSON (`pdf-base64`) vers l'adresse et le jeton déjà configurés dans la sauvegarde, uniquement après le geste de génération et si l'option est active |
+| Dépendances | `pdf: 3.12.0` (génération pure Dart, hors ligne) et `printing: 5.14.2` (aperçu et feuille de partage) |
+
+### 2. Tests
+
+`test/monthly_report_test.dart` (6 tests) vérifie : montants lisibles même quand le masquage est actif ailleurs, argent de tiers exclu des totaux, bornes de période, avis local FR/EN, PDF (logo/titre, catégories, devise, avis), fidélité de la couleur du thème actif, langue anglaise, mode simulation, avis IA injecté, repli local sans IA.
+
+`test/savings_messages_test.dart` (7 tests) couvre le catalogue d'épargne et le repli local du coach (Étape 25).
+
+### 3. Vérifications réellement exécutées
+
+| Commande | Résultat |
+| --- | --- |
+| `dart format lib test` | 112 fichiers, 0 changement après formatage |
+| `flutter analyze` | **No issues found!** |
+| `flutter test` | **162 tests, tous passés** (149 → 162) |
+| `./gradlew :printing:compileDebugJavaWithJavac :app:compileDebugKotlin` | **BUILD SUCCESSFUL in 3m 23s** (greffon `printing` + application) |
+
+### 4. Limites
+
+- Le PDF fait deux pages A4 avec le contenu actuel ; la prévisualisation native (`printing`/PDFium) et le partage n'ont pas été exercés sur un appareil.
+- L'envoi Email/WhatsApp passe par la feuille de partage du système (pièce jointe) ou `wa.me` (lien texte) : aucun serveur AKIBA n'envoie de message.
+- L'IA ne reçoit les chiffres que si elle est explicitement configurée (`ai_remote_enabled`) ; sinon l'analyse reste locale.
+
+---
+
+## Étape 25 — Messages d'épargne, taquineries de retrait et transition (24/11/2026)
+
+- `lib/core/savings/savings_messages.dart` : catalogue local FR/EN (10 encouragements et 12 taquineries par langue), sans montant, avec `{pot}` remplacé par le nom du coffre ; sélection sans répétition immédiate (décalage déterministe si le hasard retombe sur le même index).
+- `SavingsCoach` : enrichissement **optionnel** par l'IA configurée (`AiTask.coaching`). Le prompt ne contient **aucun montant** ; sans clé, hors ligne, quota épuisé ou erreur, le message local revient instantanément.
+- Après un versement : message local immédiat, puis remplacement doux par la phrase IA si elle arrive.
+- Après un **retrait** d'épargne : taquinerie locale immédiate en bas d'écran, sans montant et sans bloquer la transaction déjà enregistrée (Portefeuille).
+- Fiche de fête (`savings_celebration.dart`) : l'animation de 3 s se termine, puis le message apparaît en fondu + glissement (`AnimatedOpacity`/`AnimatedSlide`/`AnimatedSize`), avec un bouton « Continuer » ; la fête ne se referme plus toute seule avant lecture. Si « Réduire les animations » est actif, l'image finale et le message sont affichés sans mouvement.
+- Le même message est repris dans la confirmation de l'assistant après un versement d'épargne.
+
+Vérifications : couvertes par les 162 tests ; la transition visuelle n'a pas été observée sur appareil.
+
+---
+
+## Étape 26 — Identité PDF, cauris, sauvegarde portable et permissions (24/11/2026)
+
+- L’en-tête PDF affiche le nom complet, la photo de profil locale si disponible, sinon un avatar circulaire à initiales. La photo est lue depuis son stockage AES-256-GCM local et n’est pas ajoutée à la sauvegarde ; le rapport conserve les montants en clair et les blocs tiers / créances / dettes restent isolés.
+- `SavingsProjection.cauriCountForAmount` applique `montant ~/ 100`, zéro pour les montants non positifs et minimum un cauri au-dessus de zéro. Le nombre reste exact pour les grands montants et apparaît en badge, sans prolonger l’animation de 3 secondes. Le son est un clic système via `SystemSound`; son indisponibilité ou le mode silencieux ne bloque pas l’animation.
+- Les nouvelles enveloppes version 3 utilisent PBKDF2-HMAC-SHA256 (120 000 itérations) sur le `sub` stable Google et le sel applicatif, avec un sel aléatoire de 16 octets dans l’en-tête. La clé calculée reste en mémoire. Les enveloppes version 2 `device-key` restent lisibles sur l’appareil qui possède leur clé historique.
+- Le diagnostic Home Lab renvoie les erreurs d’URL, TLS, délai, port et HTTP; la normalisation garde schéma, port et chemin de santé/API.
+- À l’activation d’un rappel, la demande système est déclenchée via le greffon Android (POST_NOTIFICATIONS sur Android 13+). Au retour à l’application, l’autorisation réelle est relue, le réglage miroir est rafraîchi et les rappels actifs sont reprogrammés sans nouvelle demande.
+
+Tests ajoutés : règle de calcul cauri, PDF nom/photo, dérivation/restauration sans clé locale, et sonde Home Lab locale/URL/port.
+
+Vérifications réellement exécutées : `dart format lib test` (113 fichiers, 0 changement au dernier passage), `flutter analyze` (**No issues found!**), `flutter test --reporter compact` (**167 tests passés**). Les essais sur appareil restent listés dans `RESTE_A_FAIRE.md`.
+
+
+
+
+
+---
+
+## Étape 27 — Permission de rappel dans l’onboarding (24/11/2026)
+
+- Le switch « Rappels matin, midi et soir » interroge d’abord l’état réel. Déjà accordé : il s’active sans redemander. Refus simple : la demande Android est lancée via `Permission.notification` (`POST_NOTIFICATIONS`). Refus permanent : aucun nouvel appel à la permission, un bouton ouvre les réglages de l’application.
+- L’onboarding écoute la reprise du cycle de vie. Au retour des réglages, il relit l’autorisation, actualise le switch et persiste immédiatement `permission_notifications`.
+- Une frontière injectable `NotificationPermissionGateway` permet de tester l’interaction UI sans simuler le canal natif Android.
+
+Tests widget ajoutés pour les trois cas (déjà accordée, demande puis accord, refus définitif puis ouverture réglages et accord au retour). `dart format lib test` : 115 fichiers, aucun changement au dernier passage. `flutter analyze` : aucun problème. `flutter test --reporter compact` : **170 tests passés**.
+
+Vérification après précision du libellé du bouton : `flutter analyze` sans problème et `flutter test test/onboarding_notification_permission_test.dart` (**3 tests passés**). La suite complète précédente reste à **170 tests passés**; seul le texte du bouton a changé depuis.
+
+## Étape 28 — Bienvenue nominative et reprogrammation (24/11/2026)
+
+- À la fin de l’onboarding, AKIBA relit l’autorisation système, synchronise son miroir local, puis attend l’envoi de la notification avant la navigation. Le message inclut prénom et nom enregistrés, avec un accueil générique si le profil est vide; aucun montant n’y figure.
+- Le gateway Android croise `Permission.notification` avec `areNotificationsEnabled()` du plugin, puis relit l’état réel après une demande; le miroir local seul ne détermine plus la permission.
+- À la fin de l’onboarding, la permission est relue avant l’envoi; le canal de bienvenue est créé par le plugin lors de l’affichage. Prénom/nom restent personnalisés, aucun montant, envoi attendu avant navigation.
+- « Reprogrammer » demande si nécessaire, utilise le nombre planifié pour confirmer le succès et n’affiche le refus général que si la lecture réelle est négative. Le statut distingue aussi une autorisation générale accordée d’un canal Android `akiba_rappels` désactivé (importance `none`).
+- Tests widget : bienvenue nominative avant navigation, et clic « Reprogrammer » avec permission accordée/rappels actifs vérifiant l’appel au scheduler, 3 planifications rapportées et absence du faux refus. `dart format lib test` : 0 changement; `flutter analyze` : No issues found; test ciblé : 5 tests passés. Suite complète : en cours de validation.
+
+
+---
+
+## Étape 29 — Vraie cause du faux négatif « Notifications non autorisées » (25/11/2026)
+
+**Constat sur appareil** : Android affichait « Notifications : Autorisé » pour AKIBA, alors que le Profil répondait « Notifications non autorisées par le système », que « Reprogrammer » échouait et que la bienvenue de fin d’onboarding ne partait pas.
+
+**Cause réelle** : `LocalNotifications.ensureReady` initialisait `flutter_local_notifications` avec `AndroidInitializationSettings('@mipmap/ic_launcher')`. Le greffon valide l’icône par `getIdentifier(nom, "drawable", paquet)` : `ic_launcher` n’existe qu’en `mipmap`, la résolution renvoyait 0, `initialize` répondait `invalid_icon` et `_ready` restait faux. Comme `permissionGranted()` commençait par `if (!await ensureReady()) return false;`, **toutes** les lectures (statut du Profil, reprogrammation, bienvenue, planification) concluaient « non autorisé » sans jamais interroger le système. Le défaut n’était donc ni POST_NOTIFICATIONS ni le canal : c’était un faux négatif fabriqué par l’initialisation.
+
+**Correctifs**
+- Icône dédiée `android/app/src/main/res/drawable/ic_stat_akiba.png` (96 px, silhouette du cochon teintée par le système), utilisée par `AndroidInitializationSettings('ic_stat_akiba')` et par `icon:` des notifications `akiba_accueil`, `akiba_rappels` et `akiba_repas`.
+- `platformPermissionState()` lit `areNotificationsEnabled()` du `NotificationManager` **sans** passer par l’initialisation ; `null` signifie « illisible », jamais « refusé ». `permissionGranted()` s’appuie dessus et ne retombe sur `permission_handler` qu’en dernier recours.
+- `background_reminders.dart` (isolate Workmanager) portait la même icône invalide : il initialise et affiche désormais avec `ic_stat_akiba`, sinon les rappels de repas en arrière-plan échouaient aussi silencieusement.
+- `requestPermission()` ne renvoie plus faux quand l’initialisation échoue (tentative au mieux puis relecture de l’état réel) ; `show()` fournit l’icône explicitement et ne dépend plus de `_ready` ; `androidChannelEnabled()` n’exige plus l’initialisation.
+- `SystemNotificationPermissionGateway.status()` consulte d’abord l’état plateforme ; `permission_handler` ne sert qu’à nommer un refus et ne contredit jamais un accord constaté. `request()` déclenche une seule fenêtre POST_NOTIFICATIONS puis relit l’état.
+- `AppNotifications.welcome` ne consulte plus le miroir `permission_notifications` : l’état système décide, le miroir est seulement synchronisé quand l’accord est constaté. Nouveau point d’injection `permissionCheckOverride` pour tester accord et refus sans plateforme.
+
+**Tests** : « Reprogrammer » avec permission système accordée et miroir local faux affiche « 3 rappels planifiés sur 7 jours » sans message de refus ; fin d’onboarding, « Bienvenue dans AKIBA » avec « Ama Koffi » est envoyée malgré un miroir faux ; refus système simulé, aucun envoi même si le miroir est vrai ; test unitaire « bienvenue : le miroir local périmé ne bloque plus l’envoi ». `dart format lib test` propre, `flutter analyze` — No issues found, tests ciblés — 16 passés, suite complète — 173 passés.
+
+**Limite** : aucun appareil n’était connecté pendant ce tour (`adb devices` vide) ; l’affichage réel de la notification, la création du canal `akiba_accueil` et l’APK reconstruit restent à constater sur téléphone.

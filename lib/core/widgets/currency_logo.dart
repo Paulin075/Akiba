@@ -1,19 +1,16 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../format/akiba_currency.dart';
-import '../format/currency_logo_cache.dart';
 import '../theme/akiba_colors.dart';
 import '../theme/akiba_tokens.dart';
 import '../theme/akiba_typography.dart';
 
 /// Logo d'une devise, dans une tuile blanche de la taille de l'interface.
 ///
-/// Le fichier vient du cache local (voir `CurrencyLogoCache`) ; tant qu'il
-/// n'est pas disponible — hors ligne, premier lancement, CDN injoignable — un
-/// jeton typographique aux couleurs d'AKIBA prend sa place, sans trou visuel
-/// ni erreur.
+/// Le drapeau est **embarqué dans les assets** (`assets/logos/currencies/`) :
+/// il s'affiche même hors ligne et dès le premier lancement. Si l'asset manque
+/// (plateforme sans bundle), un jeton typographique aux couleurs d'AKIBA prend
+/// sa place, sans trou visuel ni erreur.
 class CurrencyLogo extends StatelessWidget {
   const CurrencyLogo({super.key, required this.currency, this.size = 32});
 
@@ -37,24 +34,15 @@ class CurrencyLogo extends StatelessWidget {
           boxShadow: c.cardShadow,
         ),
         clipBehavior: Clip.antiAlias,
-        child: FutureBuilder<File?>(
-          future: CurrencyLogoCache.resolve(currency),
-          builder: (BuildContext context, AsyncSnapshot<File?> snapshot) {
-            final File? file = snapshot.data;
-            if (file == null) return _fallback(c);
-            return Image.file(
-              file,
-              fit: BoxFit.contain,
-              filterQuality: FilterQuality.medium,
-              excludeFromSemantics: true,
-              errorBuilder:
-                  (
-                    BuildContext context,
-                    Object error,
-                    StackTrace? stackTrace,
-                  ) => _fallback(c),
-            );
-          },
+        child: Image.asset(
+          currency.assetPath,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.high,
+          isAntiAlias: true,
+          excludeFromSemantics: true,
+          errorBuilder:
+              (BuildContext context, Object error, StackTrace? stackTrace) =>
+                  _fallback(c),
         ),
       ),
     );

@@ -2,6 +2,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../security/aes_box.dart';
 import '../state/akiba_settings.dart';
+import 'ai_provider.dart';
 
 /// Erreur lisible du coffre de clé (jamais le secret lui-même).
 class AiKeyException implements Exception {
@@ -13,7 +14,7 @@ class AiKeyException implements Exception {
   String toString() => message;
 }
 
-/// Coffre local de la clé API du fournisseur de modèles.
+/// Coffre local de la clé API d'un fournisseur de modèles.
 ///
 /// Deux couches : la clé est chiffrée en AES-256-GCM avec une clé maîtresse
 /// aléatoire, et cette clé maîtresse vit dans le stockage sécurisé du système
@@ -23,16 +24,33 @@ class AiKeyException implements Exception {
 /// dans les réglages, donc dans la base SQLCipher. L'interface ne montre jamais
 /// la clé en clair : ni dans un champ, ni dans un message, ni dans un journal.
 class AiKeyVault {
-  AiKeyVault(this._settings, {this.storage = const FlutterSecureStorage()});
+  AiKeyVault(
+    this._settings, {
+    this.provider = AiProvider.gemini,
+    this.storage = const FlutterSecureStorage(),
+  });
 
   final AkibaSettings _settings;
+  final AiProvider provider;
   final FlutterSecureStorage storage;
 
-  /// Clé de réglage qui porte la valeur chiffrée.
-  static const String sealedSetting = 'ai_api_key_sealed';
+  /// Clé de réglage qui porte la valeur chiffrée pour [provider].
+  ///
+  /// Gemini conserve l'ancien nom : une clé déjà enregistrée reste lisible.
+  static String sealedKeyFor(AiProvider provider) => provider.isGemini
+      ? 'ai_api_key_sealed'
+      : 'ai_api_key_sealed_${provider.id}';
 
-  /// Date de dernier remplacement.
-  static const String updatedSetting = 'ai_api_key_updated_at';
+  static String updatedKeyFor(AiProvider provider) => provider.isGemini
+      ? 'ai_api_key_updated_at'
+      : 'ai_api_key_updated_at_${provider.id}';
+
+  String get sealedSetting => sealedKeyFor(provider);
+
+  String get updatedSetting => updatedKeyFor(provider);
+
+  /// Ancien nom, conservé pour les réglages Gemini existants.
+  static const String sealedSettingLegacy = 'ai_api_key_sealed';
 
   /// Libellé affiché à la place de la clé.
   static const String maskedLabel = '••••••••';

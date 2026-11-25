@@ -88,6 +88,29 @@ abstract final class AiModelCatalog {
     return models;
   }
 
+  /// Lit la réponse `data` d'une API compatible OpenAI. Le libellé n'existe
+  /// pas : l'identifiant sert des deux côtés.
+  static List<AiModel> parseOpenAiList(String body) {
+    Object? decoded;
+    try {
+      decoded = jsonDecode(body);
+    } catch (_) {
+      return const <AiModel>[];
+    }
+    if (decoded is! Map) return const <AiModel>[];
+    final Object? raw = decoded['data'];
+    if (raw is! List) return const <AiModel>[];
+    final List<AiModel> models = <AiModel>[];
+    for (final Object? entry in raw) {
+      if (entry is! Map) continue;
+      final Object? id = entry['id'];
+      if (id is! String || id.trim().isEmpty) continue;
+      if (models.any((AiModel model) => model.id == id.trim())) continue;
+      models.add(AiModel(id: id.trim(), label: id.trim()));
+    }
+    return models;
+  }
+
   static String encode(List<AiModel> models) =>
       jsonEncode(models.map((AiModel m) => m.toJson()).toList());
 

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/format/akiba_date.dart';
 import '../../core/format/akiba_money.dart';
+import '../../core/format/label_icons.dart';
 import '../../core/state/akiba_data_revision.dart';
 import '../../core/state/masked_amounts.dart';
 import '../../core/theme/akiba_colors.dart';
@@ -62,6 +63,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant AnalysisScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Bascule réel / simulation : le magasin change d'instance.
+    if (!identical(oldWidget.store, widget.store)) {
+      _reload();
+    }
+  }
+
+  @override
   void dispose() {
     widget.revision.removeListener(_reload);
     super.dispose();
@@ -69,12 +79,21 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   void _reload() {
     if (!mounted) return;
-    setState(() => _future = _load());
+    // Future créé hors de `setState` : un callback qui rend un Future est
+    // rejeté par Flutter (« returned a Future ») et la vue restait figée.
+    final Future<_AnalysisData> next = _load();
+    setState(() {
+      _future = next;
+    });
   }
 
   Future<void> _refresh() async {
     final Future<_AnalysisData> next = _load();
-    setState(() => _future = next);
+    if (mounted) {
+      setState(() {
+        _future = next;
+      });
+    }
     await next;
   }
 
@@ -88,9 +107,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       ),
       1 => (DateTime(now.year, now.month), DateTime(now.year, now.month + 1)),
       2 => (DateTime(now.year), DateTime(now.year + 1)),
-      // « Tout » ne doit jamais produire une plage absurde (2000 → 2100) :
-      // l'intervalle reste borné et la période lue depuis les données.
-      _ => (DateTime(now.year - 5), today.add(const Duration(days: 1))),
+      // « Tout » couvre réellement l'historique. Les agrégats sont calculés en
+      // SQL (période bornée à l'époque Unix pour éviter toute date invalide) et
+      // aucun mouvement n'est chargé ligne par ligne : l'écran ne gèle plus.
+      _ => (DateTime.utc(1970), today.add(const Duration(days: 1))),
     };
   }
 
@@ -125,11 +145,21 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final List<BudgetStatus> budgets = await widget.store.budgets();
     final List<Need> needs = await widget.store.needs();
     final int reserve = await widget.store.settingInt('reserve_securite');
-    final List<TransactionLine> movements = await widget.store.movements(
-      from: from,
-      to: to,
-      limit: 2000,
-    );
+    // Les barres quotidiennes n'existent que pour Semaine / Mois. Pour Année et
+    // Tout, seuls les agrégats mensuels sont utiles : charger 2 000 mouvements
+    // était la cause du gel sur « Tout ».
+    final int movementLimit = switch (_period) {
+      0 => 400,
+      1 => 1200,
+      _ => 0,
+    };
+    final List<TransactionLine> movements = movementLimit == 0
+        ? const <TransactionLine>[]
+        : await widget.store.movements(
+            from: from,
+            to: to,
+            limit: movementLimit,
+          );
 
     return _AnalysisData(
       balance: dashboard.balance,
@@ -340,10 +370,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 child: _MiniBars(bars: bars, cap: cap),
               ),
               const SizedBox(height: AkibaSpacing.sm),
-              Row(
+              Wrap(
+                spacing: AkibaSpacing.lg,
+                runSpacing: AkibaSpacing.xs,
                 children: <Widget>[
                   _LegendDot(color: c.terracotta, label: 'Dépensé'),
-                  const SizedBox(width: AkibaSpacing.lg),
                   _LegendDot(
                     color: c.sand,
                     label: budgetDaily > 0 ? 'Plafond budget' : 'Échelle',
@@ -966,6 +997,13 @@ class _BreakdownRow extends StatelessWidget {
         children: <Widget>[
           Row(
             children: <Widget>[
+              // Une icône par catégorie : lecture immédiate de la ventilation.
+              Icon(
+                LabelIcons.forCategory(label),
+                size: 17,
+                color: c.terracottaDeep,
+              ),
+              const SizedBox(width: AkibaSpacing.sm),
               Expanded(
                 child: Text(
                   label,
@@ -979,13 +1017,20 @@ class _BreakdownRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: AkibaSpacing.sm),
-              Text(
-                AkibaMoney.format(amount, masked: masked),
-                style: AkibaTypography.money(14, color: c.textPrimary),
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    AkibaMoney.format(amount, masked: masked),
+                    maxLines: 1,
+                    style: AkibaTypography.money(14, color: c.textPrimary),
+                  ),
+                ),
               ),
               const SizedBox(width: AkibaSpacing.sm),
               SizedBox(
-                width: 48,
+                width: 44,
                 child: Text(
                   masked ? '••• %' : AkibaMoney.percent(ratio * 100),
                   textAlign: TextAlign.right,
@@ -1043,22 +1088,30 @@ class _AccountRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AkibaSpacing.sm),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: <Widget>[
-              Text(
-                '− ${AkibaMoney.format(item.expense, masked: masked)}',
-                style: AkibaTypography.money(13, color: c.danger),
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: <Widget>[
+                  Text(
+                    '− ${AkibaMoney.format(item.expense, masked: masked)}',
+                    maxLines: 1,
+                    style: AkibaTypography.money(13, color: c.danger),
+                  ),
+                  Text(
+                    '+ ${AkibaMoney.format(item.income, masked: masked)}',
+                    maxLines: 1,
+                    style: AkibaTypography.money(
+                      12,
+                      weight: FontWeight.w500,
+                      color: c.success,
+                    ),
+                  ),
+                ],
               ),
-              Text(
-                '+ ${AkibaMoney.format(item.income, masked: masked)}',
-                style: AkibaTypography.money(
-                  12,
-                  weight: FontWeight.w500,
-                  color: c.success,
-                ),
-              ),
-            ],
+            ),
           ),
         ],
       ),
@@ -1099,34 +1152,66 @@ class _BudgetCard extends StatelessWidget {
         children: <Widget>[
           Row(
             children: <Widget>[
-              Expanded(
-                child: Text(
-                  status.budget.category,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: c.textPrimary,
-                  ),
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: c.iconTile,
+                  borderRadius: BorderRadius.circular(AkibaRadii.iconTile),
+                ),
+                child: Icon(
+                  LabelIcons.forCategory(status.budget.category),
+                  size: 17,
+                  color: c.terracottaDeep,
                 ),
               ),
-              _LevelPill(label: levelLabel, color: gauge),
-              IconButton(
-                tooltip: 'Modifier',
-                onPressed: onEdit,
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.edit_outlined, size: 18, color: c.textMuted),
+              const SizedBox(width: AkibaSpacing.sm),
+              // Nom et pastille empilés : aucune largeur minimale imposée à la
+              // ligne, donc aucun débordement à 320 px.
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      status.budget.category,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: c.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    _LevelPill(label: levelLabel, color: gauge),
+                  ],
+                ),
               ),
-              IconButton(
-                tooltip: 'Supprimer',
-                onPressed: onDelete,
-                visualDensity: VisualDensity.compact,
+              // Un seul menu plutôt que deux boutons : la ligne tient sur 320 px
+              // même avec une pastille « Presque atteint ».
+              PopupMenuButton<String>(
+                tooltip: 'Actions du plafond',
                 icon: Icon(
-                  Icons.delete_outline_rounded,
+                  Icons.more_vert_rounded,
                   size: 18,
                   color: c.textMuted,
                 ),
+                padding: EdgeInsets.zero,
+                onSelected: (String value) {
+                  if (value == 'edit') onEdit();
+                  if (value == 'delete') onDelete();
+                },
+                itemBuilder: (BuildContext context) =>
+                    const <PopupMenuEntry<String>>[
+                      PopupMenuItem<String>(
+                        value: 'edit',
+                        child: Text('Modifier'),
+                      ),
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: Text('Supprimer'),
+                      ),
+                    ],
               ),
             ],
           ),
@@ -1134,10 +1219,15 @@ class _BudgetCard extends StatelessWidget {
           Row(
             children: <Widget>[
               Expanded(
-                child: Text(
-                  '${AkibaMoney.format(status.spent, masked: masked)} '
-                  'sur ${AkibaMoney.format(status.limit, masked: masked)}',
-                  style: AkibaTypography.money(14, color: c.textPrimary),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '${AkibaMoney.format(status.spent, masked: masked)} '
+                    'sur ${AkibaMoney.format(status.limit, masked: masked)}',
+                    maxLines: 1,
+                    style: AkibaTypography.money(14, color: c.textPrimary),
+                  ),
                 ),
               ),
               Text(
@@ -1338,7 +1428,7 @@ class _MonthCard extends StatelessWidget {
     final double? change = before == null || before.expense == 0
         ? null
         : (month.expense - before.expense) / before.expense;
-    final String rawMonth = _monthNames[month.month - 1];
+    final String rawMonth = _monthNames[(month.month - 1).clamp(0, 11).toInt()];
     final String monthLabel =
         '${rawMonth[0].toUpperCase()}${rawMonth.substring(1)} ${month.year}';
 

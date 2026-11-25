@@ -1,16 +1,26 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:permission_handler/permission_handler.dart';
 
+import '../../core/backup/google_drive_backup.dart';
 import '../../core/format/akiba_currency.dart';
 import '../../core/format/akiba_date.dart';
 import '../../core/profile/avatar_editor.dart';
 import '../../core/notifications/local_notifications.dart';
+import '../../core/notifications/background_reminders.dart';
 import '../../core/notifications/reminder_planner.dart';
+import '../../core/notifications/reminder_scheduler.dart';
 import '../../core/profile/profile_photo.dart';
+import '../../core/report/monthly_report.dart';
+import '../../core/report/report_pdf.dart';
+import '../../core/report/report_scheduler.dart';
 import '../../core/security/pin_vault.dart';
 import '../../core/state/akiba_data_revision.dart';
+import '../../core/state/akiba_l10n.dart';
 import '../../core/state/akiba_settings.dart';
 import '../../core/state/masked_amounts.dart';
 import '../../core/theme/akiba_colors.dart';
@@ -20,11 +30,13 @@ import '../../core/theme/akiba_typography.dart';
 import '../../core/widgets/currency_logo.dart';
 import '../../core/widgets/icon_circle_button.dart';
 import '../../core/widgets/profile_avatar.dart';
+import '../../core/widgets/segmented_control.dart';
 import '../../core/widgets/theme_swatch.dart';
 import '../../data/akiba_store.dart';
 import '../assistant/ai_settings_sheet.dart';
 import '../assistant/assistant_sheet.dart';
 import '../backup/backup_center.dart';
+import '../report/report_preview.dart';
 import '../sms/sms_review_sheet.dart';
 
 /// Écran Profil : mosaïque Bento regroupant sécurité, apparence,
@@ -36,21 +48,69 @@ class ProfileScreen extends StatefulWidget {
     required this.settings,
     required this.revision,
     required this.onReplayOnboarding,
+    this.reprogramReminders,
+    this.notificationPermissionCheck,
+    this.notificationsSupported,
   });
 
   final AkibaStore store;
   final AkibaSettings settings;
   final AkibaDataRevision revision;
   final VoidCallback onReplayOnboarding;
+  final Future<int> Function(AkibaSettings settings)? reprogramReminders;
+  final Future<bool> Function()? notificationPermissionCheck;
+  final bool? notificationsSupported;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
+class _ProfileScreenState extends State<ProfileScreen>
+    with WidgetsBindingObserver {
   String _notifStatus = '';
+  bool _reportBusy = false;
+  late final TextEditingController _reportEmail = TextEditingController(
+    text: _s.raw('report_email'),
+  );
+  late final TextEditingController _reportWhatsapp = TextEditingController(
+    text: _s.raw('report_whatsapp'),
+  );
 
   AkibaSettings get _s => widget.settings;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshNotificationPermission();
+  }
+
+  Future<void> _refreshNotificationPermission() async {
+    if (!LocalNotifications.supported) return;
+    final bool granted = await LocalNotifications.permissionGranted();
+    await _s.setFlag('permission_notifications', granted);
+    if (ReminderScheduler.anyEnabled(_s)) {
+      await ReminderScheduler.reprogram(_s, store: _s.store);
+    }
+    if (!mounted) return;
+    setState(
+      () => _notifStatus = granted
+          ? 'Autorisation de notification accordée par le système.'
+          : 'Notifications non autorisées par le système.',
+    );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _reportEmail.dispose();
+    _reportWhatsapp.dispose();
+    super.dispose();
+  }
 
   // ------------------------------------------------------- Photo de profil
 
@@ -130,7 +190,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (!enable) {
       final bool ok = await _askPin();
       if (!ok) return;
-      await PinVault(widget.store).clear(widget.store);
+      // Toujours le magasin des réglages (base réelle), même en simulation :
+      // c'est lui que lit le verrouillage au démarrage.
+      await PinVault(_s.store).clear(_s.store);
       await _s.setFlag('biometrics', false);
       await _s.load();
       _toast('Code PIN retiré.');
@@ -141,7 +203,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final String? newPin = await showDialog<String>(
       context: context,
       builder: (BuildContext context) =>
-          _PinDialog(store: widget.store, requireCurrent: configured),
+          _PinDialog(store: _s.store, requireCurrent: configured),
     );
     if (newPin == null) return;
     await _s.load();
@@ -152,7 +214,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final bool? result = await showDialog<bool>(
       context: context,
       builder: (BuildContext context) =>
-          _VerifyPinDialog(vault: PinVault(widget.store)),
+          _VerifyPinDialog(vault: PinVault(_s.store)),
     );
     return result ?? false;
   }
@@ -194,56 +256,69 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ---------------------------------------------------------- Notifications
 
-  ReminderConfig _reminderConfig() => ReminderConfig(
-    morningEnabled: _s.morningEnabled,
-    noonEnabled: _s.noonEnabled,
-    eveningEnabled: _s.eveningEnabled,
-    morningTime: _s.morningTime,
-    noonTime: _s.noonTime,
-    eveningTime: _s.eveningTime,
-    dndEnabled: _s.dndEnabled,
-    dndStart: _s.dndStart,
-    dndEnd: _s.dndEnd,
-    festiveEnabled: _s.festiveEnabled,
-    festiveLabel: _s.festiveLabel,
-    masked: MaskedAmounts.of(context),
-  );
-
   Future<void> _reschedule() async {
-    final ReminderConfig config = _reminderConfig();
-    if (!config.morningEnabled &&
-        !config.noonEnabled &&
-        !config.eveningEnabled) {
+    if (!ReminderScheduler.anyEnabled(_s)) {
       await LocalNotifications.cancelAll();
+      await BackgroundReminders.cancel();
+      if (!mounted) return;
       setState(() => _notifStatus = 'Tous les rappels sont désactivés.');
       return;
     }
 
-    final List<ReminderPlan> plans = ReminderPlanner.plan(
-      config,
-      now: DateTime.now(),
-      horizonDays: 7,
-    );
-    if (!LocalNotifications.supported) {
-      setState(() {
-        _notifStatus =
-            '${plans.length} rappels prêts pour 7 jours. La livraison système '
-            'Windows n’est pas encore prise en charge : les messages '
-            's’affichent dans AKIBA.';
-      });
-      return;
-    }
-
-    final bool permission = await LocalNotifications.requestPermission();
-    final int scheduled = permission
-        ? await LocalNotifications.schedule(plans)
-        : 0;
+    final bool supported =
+        widget.notificationsSupported ?? LocalNotifications.supported;
+    // Un seul chemin de planification : greffon initialisé, autorisation
+    // mémorisée, échéances de dettes incluses, Workmanager inscrit une fois.
+    final int scheduled =
+        await (widget.reprogramReminders?.call(_s) ??
+            ReminderScheduler.reprogram(
+              _s,
+              store: _s.store,
+              requestPermission: true,
+            ));
+    if (!mounted) return;
+    // Un échec de planification peut venir d'une permission révoquée : on
+    // relit l'état réel pour ne pas annoncer « refusé » à tort.
+    final bool granted = supported
+        ? await (widget.notificationPermissionCheck?.call() ??
+              LocalNotifications.permissionGranted())
+        : false;
     if (!mounted) return;
     setState(() {
-      _notifStatus = scheduled > 0
-          ? '$scheduled rappels planifiés sur 7 jours, sans aucun montant.'
-          : 'Autorisation de notification refusée ou planification indisponible.';
+      if (!supported) {
+        _notifStatus =
+            'Les rappels sont prêts pour 7 jours. La livraison système '
+            'Windows n’est pas encore prise en charge : les messages '
+            's’affichent dans AKIBA.';
+      } else if (scheduled > 0) {
+        _notifStatus =
+            '$scheduled rappels planifiés sur 7 jours, échéances de créances '
+            'et de dettes comprises. Aucun montant, aucun nom de contact.';
+      } else if (!granted) {
+        _notifStatus =
+            'Notifications non autorisées par le système : la demande a été '
+            'tentée. Ouvrez les réglages Android d’AKIBA pour autoriser les '
+            'notifications, puis appuyez de nouveau sur Reprogrammer.';
+      } else {
+        _notifStatus =
+            'Autorisation générale accordée, mais aucun rappel planifié. '
+            'Vérifiez que le canal « Rappels AKIBA » est activé dans les '
+            'réglages de notifications Android.';
+      }
     });
+    if (scheduled > 0 &&
+        widget.notificationPermissionCheck == null &&
+        Platform.isAndroid) {
+      final bool? channelEnabled =
+          await LocalNotifications.androidChannelEnabled('akiba_rappels');
+      if (!mounted || channelEnabled != false) return;
+      setState(
+        () => _notifStatus =
+            'Autorisation générale accordée, mais le canal « Rappels AKIBA » '
+            'est désactivé dans Android. Activez-le dans les réglages de '
+            'notifications de l’application.',
+      );
+    }
   }
 
   Future<void> _pickTime({
@@ -324,6 +399,66 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (mounted) setState(() {});
   }
 
+  // ------------------------------------------------------ Rapport mensuel
+
+  Future<void> _saveReportContacts() async {
+    await _s.set('report_email', _reportEmail.text.trim());
+    await _s.set('report_whatsapp', _reportWhatsapp.text.trim());
+  }
+
+  /// Génère le PDF à la demande, l'ouvre en prévisualisation, puis le copie
+  /// éventuellement vers le Home Lab. Les montants sont en clair dans le
+  /// rapport ; rien n'est envoyé sans ce geste.
+  Future<void> _openReport() async {
+    if (_reportBusy) return;
+    final Uint8List? profilePhotoBytes = ProfilePhotoScope.maybeOf(
+      context,
+    )?.bytes;
+    setState(() => _reportBusy = true);
+    await _saveReportContacts();
+    try {
+      final ReportPeriod period = ReportPeriod.fromStorage(
+        _s.raw('report_period'),
+      );
+      MonthlyReport report = await MonthlyReport.build(
+        store: widget.store,
+        settings: _s,
+        period: period,
+        profilePhotoBytes: profilePhotoBytes,
+      );
+      report = await const ReportAdvisor().enrich(report, _s);
+      final Uint8List bytes = await const ReportPdfBuilder().build(report);
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (BuildContext context) =>
+              ReportPreviewScreen(report: report, bytes: bytes, settings: _s),
+        ),
+      );
+      await _s.set(
+        'report_last_generated_at',
+        DateTime.now().toIso8601String(),
+      );
+      if (_s.flag('report_home_lab')) {
+        final bool sent = await ReportScheduler.sendToHomeLab(
+          settings: _s,
+          pdf: bytes,
+        );
+        _toast(
+          sent
+              ? 'Rapport copié vers le Home Lab.'
+              : 'Home Lab injoignable : le PDF reste disponible.',
+          error: !sent,
+        );
+      }
+      if (mounted) setState(() {});
+    } catch (_) {
+      _toast('Génération du rapport impossible.', error: true);
+    } finally {
+      if (mounted) setState(() => _reportBusy = false);
+    }
+  }
+
   Future<void> _openSms() async {
     await openSmsReview(
       context,
@@ -331,6 +466,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
       revision: widget.revision,
       masked: MaskedAmounts.of(context),
     );
+  }
+
+  /// Active la détection SMS en arrière-plan (Flooz, Mixx by Yas, banques).
+  ///
+  /// L'autorisation système est la seule clé : sans elle, le récepteur Android
+  /// ne reçoit rien. Le drapeau n'est qu'un reflet pour l'interface.
+  Future<void> _enableSmsDetection() async {
+    PermissionStatus status = await Permission.sms.status;
+    if (!status.isGranted) status = await Permission.sms.request();
+    await _s.setFlag('permission_sms', status.isGranted);
+    if (!mounted) return;
+    if (status.isGranted) {
+      _toast(
+        'Détection SMS activée : un dépôt ou retrait détecté ouvre la fiche '
+        'à confirmer, jamais une écriture automatique.',
+      );
+    } else if (status.isPermanentlyDenied) {
+      _toast(
+        'Autorisation SMS refusée définitivement : ouvrez les réglages du '
+        'système pour l’accorder à AKIBA.',
+        error: true,
+      );
+      await openAppSettings();
+    } else {
+      _toast(
+        'Autorisation SMS refusée : la détection reste désactivée.',
+        error: true,
+      );
+    }
   }
 
   Future<void> _openBackup() async {
@@ -345,14 +509,75 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {});
   }
 
+  /// Déconnexion explicite du compte Google lié.
+  ///
+  /// La session et le jeton durable sont retirés (coffre du système), mais les
+  /// données locales chiffrées ne sont **jamais** supprimées : aucune
+  /// opération destructive n'est lancée sans une confirmation distincte.
+  Future<void> _signOut() async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('Se déconnecter ?'),
+        content: const Text(
+          'Le compte Google lié et la session de sauvegarde seront retirés. '
+          'Vos données locales chiffrées restent intactes : rien n’est '
+          'supprimé et AKIBA reste utilisable hors ligne.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Se déconnecter'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await GoogleDriveService().signOut();
+    } catch (_) {
+      // Coffre indisponible : le drapeau local suffit à repasser hors ligne.
+    }
+    await _s.setFlag('google_linked', false);
+    await _s.set('last_backup_target', '');
+    if (!mounted) return;
+    _toast('Déconnecté. Vos données locales chiffrées sont conservées.');
+  }
+
   // -------------------------------------------------------------- Build
 
   @override
   Widget build(BuildContext context) {
     final AkibaColors c = AkibaColors.of(context);
     final bool masked = MaskedAmounts.of(context);
-    final String name = _s.firstName.isEmpty ? 'Votre profil' : _s.firstName;
+    final String name = _s.firstName.isEmpty
+        ? AkibaL10n.tr('my_profile')
+        : _s.firstName;
     final ProfilePhotoController? photo = ProfilePhotoScope.maybeOf(context);
+
+    // Une valeur enregistrée inconnue (restauration, ancienne version) doit
+    // rester sélectionnable : sinon `DropdownButton` lève l'assertion
+    // « exactly one item with value ». Les dates retombent sur le format
+    // français par défaut.
+    const List<String> knownTimezones = <String>[
+      'Africa/Lome',
+      'Africa/Cotonou',
+      'Africa/Abidjan',
+      'Africa/Dakar',
+      'Europe/Paris',
+    ];
+    final List<String> timezones = <String>[
+      ...knownTimezones,
+      if (!knownTimezones.contains(_s.timezone)) _s.timezone,
+    ];
+    final String dateStyle =
+        const <String>['jj/mm/aaaa', 'aaaa-mm-jj'].contains(_s.dateStyle)
+        ? _s.dateStyle
+        : 'jj/mm/aaaa';
 
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
@@ -399,7 +624,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: <Widget>[
                             Text(
-                              'PROFIL',
+                              AkibaL10n.tr('profile_label'),
                               style: AkibaTypography.label.copyWith(
                                 color: c.textMuted,
                                 letterSpacing: 1.6,
@@ -422,14 +647,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   onPressed: _pickPhoto,
                                   child: Text(
                                     photo?.hasPhoto ?? false
-                                        ? 'Changer la photo'
-                                        : 'Ajouter une photo',
+                                        ? AkibaL10n.tr('change_photo')
+                                        : AkibaL10n.tr('add_photo'),
                                   ),
                                 ),
                                 if (photo?.hasPhoto ?? false)
                                   TextButton(
                                     onPressed: _removePhoto,
-                                    child: const Text('Retirer'),
+                                    child: Text(AkibaL10n.tr('remove')),
                                   ),
                               ],
                             ),
@@ -441,8 +666,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ? Icons.visibility_off_rounded
                             : Icons.visibility_rounded,
                         tooltip: masked
-                            ? 'Afficher les montants'
-                            : 'Masquer les montants',
+                            ? AkibaL10n.tr('show_amounts')
+                            : AkibaL10n.tr('hide_amounts'),
                         onTap: () => MaskedAmounts.toggle(context),
                       ),
                     ],
@@ -455,7 +680,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _tile(
                         c,
                         tileWidth,
-                        title: 'Sécurité',
+                        title: AkibaL10n.tr('security'),
                         icon: Icons.lock_outline_rounded,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -497,7 +722,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _tile(
                         c,
                         tileWidth,
-                        title: 'Confidentialité',
+                        title: AkibaL10n.tr('privacy'),
                         icon: Icons.visibility_off_outlined,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -525,13 +750,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _tile(
                         c,
                         tileWidth,
-                        title: 'Apparence',
+                        title: AkibaL10n.tr('appearance'),
                         icon: Icons.palette_outlined,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: <Widget>[
                             Text(
-                              'Thème',
+                              AkibaL10n.tr('theme'),
                               style: AkibaTypography.label.copyWith(
                                 color: c.textMuted,
                               ),
@@ -552,10 +777,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                             const SizedBox(height: AkibaSpacing.xs),
                             Text(
-                              'L’aperçu est immédiat : palettes à contraste '
-                              'élevé, logos officiels intacts, barre basse '
-                              'ancrée et boutons latéraux identiques dans '
-                              'les cinq thèmes.',
+                              AkibaL10n.tr('appearance_note'),
                               style: AkibaTypography.legend.copyWith(
                                 color: c.textMuted,
                                 height: 1.4,
@@ -564,7 +786,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             const SizedBox(height: AkibaSpacing.sm),
                             _switchRow(
                               c,
-                              'Réduire les animations',
+                              AkibaL10n.tr('reduce_animations'),
                               'Fondu rapide de 150 ms, jauges sans rebond',
                               _s.reduceAnimations,
                               _s.setReduceAnimations,
@@ -575,13 +797,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _tile(
                         c,
                         tileWidth,
-                        title: 'Préférences',
+                        title: AkibaL10n.tr('preferences'),
                         icon: Icons.tune_rounded,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: <Widget>[
                             Text(
-                              'Devise',
+                              AkibaL10n.tr('currency'),
                               style: AkibaTypography.label.copyWith(
                                 color: c.textMuted,
                               ),
@@ -602,25 +824,47 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                             const SizedBox(height: AkibaSpacing.xs),
                             Text(
-                              'Seul l’affichage change : aucun taux de change '
-                              'n’est appliqué aux montants.',
+                              AkibaL10n.tr('currency_note'),
                               style: AkibaTypography.legend.copyWith(
                                 color: c.textMuted,
                               ),
                             ),
                             const SizedBox(height: AkibaSpacing.sm),
+                            Text(
+                              AkibaL10n.tr('language'),
+                              style: AkibaTypography.label.copyWith(
+                                color: c.textMuted,
+                              ),
+                            ),
+                            const SizedBox(height: AkibaSpacing.xs),
+                            SegmentedControl(
+                              segments: const <String>['Français', 'English'],
+                              selectedIndex: _s.language == 'en' ? 1 : 0,
+                              onChanged: (int index) =>
+                                  _s.setLanguage(index == 1 ? 'en' : 'fr'),
+                            ),
+                            const SizedBox(height: AkibaSpacing.xs),
+                            Text(
+                              AkibaL10n.tr('language_note'),
+                              style: AkibaTypography.legend.copyWith(
+                                color: c.textMuted,
+                                height: 1.4,
+                              ),
+                            ),
+                            const SizedBox(height: AkibaSpacing.sm),
                             DropdownButtonFormField<String>(
-                              initialValue: _s.dateStyle,
+                              initialValue: dateStyle,
                               isDense: true,
-                              decoration: _field(c, 'Dates'),
+                              isExpanded: true,
+                              decoration: _field(c, AkibaL10n.tr('dates')),
                               items: const <DropdownMenuItem<String>>[
                                 DropdownMenuItem<String>(
                                   value: 'jj/mm/aaaa',
-                                  child: Text('Dates : 19/11/2026'),
+                                  child: Text('19/11/2026'),
                                 ),
                                 DropdownMenuItem<String>(
                                   value: 'aaaa-mm-jj',
-                                  child: Text('Dates : 2026-11-19'),
+                                  child: Text('2026-11-19'),
                                 ),
                               ],
                               onChanged: (String? value) {
@@ -631,28 +875,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             DropdownButtonFormField<String>(
                               initialValue: _s.timezone,
                               isDense: true,
-                              decoration: _field(c, 'Fuseau'),
-                              items: const <DropdownMenuItem<String>>[
-                                DropdownMenuItem<String>(
-                                  value: 'Africa/Lome',
-                                  child: Text('Africa/Lome'),
-                                ),
-                                DropdownMenuItem<String>(
-                                  value: 'Africa/Cotonou',
-                                  child: Text('Africa/Cotonou'),
-                                ),
-                                DropdownMenuItem<String>(
-                                  value: 'Africa/Abidjan',
-                                  child: Text('Africa/Abidjan'),
-                                ),
-                                DropdownMenuItem<String>(
-                                  value: 'Africa/Dakar',
-                                  child: Text('Africa/Dakar'),
-                                ),
-                                DropdownMenuItem<String>(
-                                  value: 'Europe/Paris',
-                                  child: Text('Europe/Paris'),
-                                ),
+                              isExpanded: true,
+                              decoration: _field(c, AkibaL10n.tr('timezone')),
+                              items: <DropdownMenuItem<String>>[
+                                for (final String zone in timezones)
+                                  DropdownMenuItem<String>(
+                                    value: zone,
+                                    child: Text(zone),
+                                  ),
                               ],
                               onChanged: (String? value) {
                                 if (value != null) _s.set('timezone', value);
@@ -660,8 +890,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                             const SizedBox(height: AkibaSpacing.xs),
                             Text(
-                              'Le fuseau sert aux rappels ; les dates restent '
-                              'celles de l’appareil.',
+                              AkibaL10n.tr('timezone_note'),
                               style: AkibaTypography.legend.copyWith(
                                 color: c.textMuted,
                                 fontSize: 11,
@@ -674,7 +903,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         c,
                         tileWidth * (columns > 1 ? 2 : 1) +
                             (columns > 1 ? AkibaSpacing.lg : 0),
-                        title: 'Rappels quotidiens',
+                        title: AkibaL10n.tr('daily_reminders'),
                         icon: Icons.notifications_none_rounded,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -706,6 +935,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               time: _s.eveningTime,
                               title: 'Soir',
                               detail: 'Clôture & bilan de journée',
+                            ),
+                            _switchRow(
+                              c,
+                              'Rappel de dépenses',
+                              'Entre 17 h et 20 h · sans montant',
+                              _s.expenseReminderEnabled,
+                              (bool enabled) async {
+                                await _s.setFlag('notif_expense', enabled);
+                                await _reschedule();
+                              },
                             ),
                             const Divider(height: AkibaSpacing.xl),
                             _switchRow(
@@ -790,7 +1029,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _tile(
                         c,
                         tileWidth,
-                        title: 'Assistant IA',
+                        title: AkibaL10n.tr('ai_assistant'),
                         icon: Icons.auto_awesome_rounded,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -839,27 +1078,57 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _tile(
                         c,
                         tileWidth,
-                        title: 'SMS financiers',
+                        title: AkibaL10n.tr('sms_title'),
                         icon: Icons.sms_outlined,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: <Widget>[
                             Text(
-                              'Flooz, Mixx by Yas, Orabank : chaque SMS est relu '
-                              'et peut être isolé comme argent de tiers.',
+                              'Flooz, Mixx by Yas et banques : un SMS de dépôt '
+                              'ou de retrait ouvre une fiche à confirmer, jamais '
+                              'une écriture automatique.',
                               style: AkibaTypography.legend.copyWith(
                                 color: c.textMuted,
                                 height: 1.45,
                               ),
                             ),
+                            const SizedBox(height: AkibaSpacing.sm),
+                            _moduleRow(
+                              c,
+                              icon: _s.flag('permission_sms')
+                                  ? Icons.mark_email_read_outlined
+                                  : Icons.mark_email_unread_outlined,
+                              title: _s.flag('permission_sms')
+                                  ? 'Détection automatique active'
+                                  : 'Détection automatique inactive',
+                              detail: _s.flag('permission_sms')
+                                  ? 'Application fermée comprise · notification '
+                                        'sans montant'
+                                  : 'Autorisation SMS requise',
+                            ),
                             const SizedBox(height: AkibaSpacing.md),
-                            OutlinedButton.icon(
-                              onPressed: _openSms,
-                              icon: const Icon(
-                                Icons.fact_check_outlined,
-                                size: 18,
-                              ),
-                              label: const Text('Relire des SMS'),
+                            Wrap(
+                              spacing: AkibaSpacing.sm,
+                              runSpacing: AkibaSpacing.sm,
+                              children: <Widget>[
+                                OutlinedButton.icon(
+                                  onPressed: _openSms,
+                                  icon: const Icon(
+                                    Icons.fact_check_outlined,
+                                    size: 18,
+                                  ),
+                                  label: const Text('Relire des SMS'),
+                                ),
+                                if (!_s.flag('permission_sms'))
+                                  FilledButton.icon(
+                                    onPressed: _enableSmsDetection,
+                                    icon: const Icon(
+                                      Icons.sms_outlined,
+                                      size: 18,
+                                    ),
+                                    label: const Text('Activer la détection'),
+                                  ),
+                              ],
                             ),
                           ],
                         ),
@@ -867,7 +1136,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _tile(
                         c,
                         tileWidth,
-                        title: 'Sauvegarde & synchronisation',
+                        title: AkibaL10n.tr('backup_sync'),
                         icon: Icons.cloud_outlined,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -894,6 +1163,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               icon: const Icon(Icons.lock_rounded, size: 18),
                               label: const Text('Centre de sauvegarde'),
                             ),
+                            const SizedBox(height: AkibaSpacing.xs),
+                            OutlinedButton.icon(
+                              onPressed: _signOut,
+                              icon: const Icon(Icons.logout_rounded, size: 18),
+                              label: const Text('Se déconnecter'),
+                            ),
                           ],
                         ),
                       ),
@@ -901,7 +1176,193 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         c,
                         tileWidth * (columns > 1 ? 2 : 1) +
                             (columns > 1 ? AkibaSpacing.lg : 0),
-                        title: 'Données & démonstration',
+                        title: 'Rapport mensuel',
+                        icon: Icons.picture_as_pdf_outlined,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: <Widget>[
+                            Text(
+                              'PDF généré et prévisualisé sur l’appareil, '
+                              'dans la langue et le thème actifs. Les montants y '
+                              'restent en clair, même si le masquage est actif '
+                              'ailleurs ; l’argent de tiers et les dettes '
+                              'restent isolés.',
+                              style: AkibaTypography.legend.copyWith(
+                                color: c.textMuted,
+                                height: 1.45,
+                              ),
+                            ),
+                            const SizedBox(height: AkibaSpacing.md),
+                            DropdownButtonFormField<ReportPeriod>(
+                              initialValue: ReportPeriod.fromStorage(
+                                _s.raw('report_period'),
+                              ),
+                              isDense: true,
+                              decoration: InputDecoration(
+                                labelText: 'Période',
+                                isDense: true,
+                                filled: true,
+                                fillColor: c.surfaceElevated,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    AkibaRadii.field,
+                                  ),
+                                  borderSide: BorderSide.none,
+                                ),
+                              ),
+                              items: <DropdownMenuItem<ReportPeriod>>[
+                                for (final ReportPeriod period
+                                    in ReportPeriod.values)
+                                  DropdownMenuItem<ReportPeriod>(
+                                    value: period,
+                                    child: Text(
+                                      period.label(_s.language),
+                                      style: TextStyle(color: c.textPrimary),
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (ReportPeriod? value) async {
+                                if (value == null) return;
+                                await _s.set('report_period', value.name);
+                                if (mounted) setState(() {});
+                              },
+                            ),
+                            const SizedBox(height: AkibaSpacing.sm),
+                            _switchRow(
+                              c,
+                              'Données de simulation',
+                              'Le rapport utilise alors les données d’essai '
+                                  'locales',
+                              _s.simulationMode,
+                              (bool v) async {
+                                await _s.setFlag('simulation_mode', v);
+                                widget.revision.bump();
+                                if (mounted) setState(() {});
+                              },
+                            ),
+                            const SizedBox(height: AkibaSpacing.xs),
+                            TextField(
+                              controller: _reportEmail,
+                              keyboardType: TextInputType.emailAddress,
+                              decoration: InputDecoration(
+                                labelText: 'Destinataire Email',
+                                hintText: 'nom@exemple.com',
+                                isDense: true,
+                                filled: true,
+                                fillColor: c.surfaceElevated,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    AkibaRadii.field,
+                                  ),
+                                  borderSide: BorderSide.none,
+                                ),
+                              ),
+                              onSubmitted: (_) => _saveReportContacts(),
+                            ),
+                            const SizedBox(height: AkibaSpacing.sm),
+                            TextField(
+                              controller: _reportWhatsapp,
+                              keyboardType: TextInputType.phone,
+                              decoration: InputDecoration(
+                                labelText: 'Numéro WhatsApp',
+                                hintText: '+228 90 00 00 00',
+                                isDense: true,
+                                filled: true,
+                                fillColor: c.surfaceElevated,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    AkibaRadii.field,
+                                  ),
+                                  borderSide: BorderSide.none,
+                                ),
+                              ),
+                              onSubmitted: (_) => _saveReportContacts(),
+                            ),
+                            const SizedBox(height: AkibaSpacing.sm),
+                            _switchRow(
+                              c,
+                              'Fin de mois',
+                              'Généré au premier lancement du mois suivant, '
+                                  'sans réseau',
+                              _s.flag('report_end_of_month'),
+                              (bool v) async {
+                                await _s.setFlag('report_end_of_month', v);
+                                if (mounted) setState(() {});
+                              },
+                            ),
+                            _switchRow(
+                              c,
+                              'Copier vers le Home Lab',
+                              _s.labUrl.isEmpty
+                                  ? 'Home Lab non configuré'
+                                  : _s.labUrl,
+                              _s.flag('report_home_lab'),
+                              (bool v) {
+                                if (_s.labUrl.isEmpty) {
+                                  _toast(
+                                    'Configurez le Home Lab dans Sauvegarde avant '
+                                    'd’activer la copie.',
+                                    error: true,
+                                  );
+                                  return;
+                                }
+                                _s.setFlag('report_home_lab', v);
+                                setState(() {});
+                              },
+                            ),
+                            const SizedBox(height: AkibaSpacing.sm),
+                            _moduleRow(
+                              c,
+                              icon: _s.aiRemoteEnabled
+                                  ? Icons.auto_awesome_rounded
+                                  : Icons.offline_bolt_outlined,
+                              title: _s.aiRemoteEnabled
+                                  ? 'Avis IA activé'
+                                  : 'Analyse locale déterministe',
+                              detail: _s.aiRemoteEnabled
+                                  ? 'Repli local instantané si hors ligne'
+                                  : 'Aucune clé IA requise',
+                            ),
+                            const SizedBox(height: AkibaSpacing.md),
+                            FilledButton.icon(
+                              onPressed: _reportBusy ? null : _openReport,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: c.terracotta,
+                                foregroundColor: c.onTerracotta,
+                              ),
+                              icon: _reportBusy
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.preview_outlined,
+                                      size: 18,
+                                    ),
+                              label: const Text('Générer et prévisualiser'),
+                            ),
+                            const SizedBox(height: AkibaSpacing.xs),
+                            Text(
+                              _s.raw('report_last_generated_at').isEmpty
+                                  ? 'Aucun rapport généré pour l’instant.'
+                                  : 'Dernier rapport : '
+                                        '${AkibaDate.short(DateTime.tryParse(_s.raw('report_last_generated_at'))?.toLocal() ?? DateTime.now())}',
+                              style: AkibaTypography.legend.copyWith(
+                                color: c.textMuted,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _tile(
+                        c,
+                        tileWidth * (columns > 1 ? 2 : 1) +
+                            (columns > 1 ? AkibaSpacing.lg : 0),
+                        title: AkibaL10n.tr('data_demo'),
                         icon: Icons.storage_outlined,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -983,36 +1444,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
           borderRadius: BorderRadius.circular(AkibaRadii.tile),
           boxShadow: c.cardShadow,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    color: c.iconTile,
-                    borderRadius: BorderRadius.circular(AkibaRadii.iconTile),
+        // Material transparent : les interrupteurs de la tuile peignent leur
+        // encre sur ce Material, et non sur celui du Scaffold masqué par le
+        // fond de la tuile.
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: c.iconTile,
+                      borderRadius: BorderRadius.circular(AkibaRadii.iconTile),
+                    ),
+                    child: Icon(icon, size: 18, color: c.terracottaDeep),
                   ),
-                  child: Icon(icon, size: 18, color: c.terracottaDeep),
-                ),
-                const SizedBox(width: AkibaSpacing.sm),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: c.textPrimary,
+                  const SizedBox(width: AkibaSpacing.sm),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: c.textPrimary,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AkibaSpacing.md),
-            child,
-          ],
+                ],
+              ),
+              const SizedBox(height: AkibaSpacing.md),
+              child,
+            ],
+          ),
         ),
       ),
     );

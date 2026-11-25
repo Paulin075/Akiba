@@ -18,7 +18,9 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.example.akiba"
-    compileSdk = flutter.compileSdkVersion
+    // permission_handler_android 14.1.1 is built against Android API 37.
+    // SDK 37 is installed locally; targetSdk remains controlled by Flutter.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -70,6 +72,27 @@ kotlin {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+
+// Seule copie automatique des identifiants Google OAuth : Android n'a pas de
+// dossier `secrets/`, la copie embarquée doit donc être à jour avant que
+// Flutter n'assemble les assets. Le script supprime la copie quand la source
+// est absente et se tait quand elle est déjà à jour ; un échec (Dart absent du
+// PATH, JSON illisible) ne doit jamais bloquer la build : l'application reste
+// alors utilisable avec le dossier Drive synchronisé.
+val syncOAuthSecrets = tasks.register<Exec>("syncOAuthSecrets") {
+    workingDir = rootProject.projectDir.parentFile
+    val command = "dart run tool/sync_oauth_secrets.dart"
+    if (System.getProperty("os.name").lowercase().contains("win")) {
+        commandLine("cmd", "/c", "$command & exit 0")
+    } else {
+        commandLine("sh", "-c", "$command || true")
+    }
+    isIgnoreExitValue = true
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(syncOAuthSecrets)
 }
 
 flutter {

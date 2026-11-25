@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/ai/ai_client.dart';
 import '../../core/ai/ai_key_vault.dart';
 import '../../core/ai/ai_model_catalog.dart';
+import '../../core/ai/ai_provider.dart';
 import '../../core/ai/ai_quota.dart';
 import '../../core/format/akiba_date.dart';
 import '../../core/state/akiba_settings.dart';
@@ -10,11 +11,12 @@ import '../../core/theme/akiba_colors.dart';
 import '../../core/theme/akiba_tokens.dart';
 import '../../core/theme/akiba_typography.dart';
 
-/// Réglages du module IA : clé API chiffrée, liste des modèles, priorité et
-/// bascule distante.
+/// Réglages du module IA : fournisseur, adresse, clé chiffrée, modèles,
+/// priorité et quota.
 ///
-/// La clé n'est jamais réaffichée : le champ est vide, masqué, et un
-/// remplacement remplace l'ancienne valeur sans la montrer.
+/// La clé de chaque fournisseur est chiffrée séparément (AES-256-GCM) et n'est
+/// jamais réaffichée : le champ reste vide. Home Lab / Ollama accepte un jeton
+/// vide ; les autres fournisseurs en exigent un.
 Future<void> openAiSettings(
   BuildContext context, {
   required AkibaSettings settings,
@@ -38,8 +40,11 @@ class _AiSettingsSheet extends StatefulWidget {
 
 class _AiSettingsSheetState extends State<_AiSettingsSheet> {
   final TextEditingController _keyField = TextEditingController();
+  final TextEditingController _urlField = TextEditingController();
+  final TextEditingController _modelField = TextEditingController();
 
-  late final AiKeyVault _vault = AiKeyVault(widget.settings);
+  late final AiProviderSettings _cfg = AiProviderSettings(widget.settings);
+  late AiProvider _provider = _cfg.provider;
   late List<AiModel> _catalog = AiModelCatalog.decode(
     widget.settings.raw('ai_models_cache'),
   );
@@ -51,6 +56,17 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
   bool _error = false;
 
   AkibaSettings get _s => widget.settings;
+
+  AiKeyVault get _vault => AiKeyVault(_s, provider: _provider);
+
+  AiQuota get _quota => AiQuota(_s);
+
+  @override
+  void initState() {
+    super.initState();
+    _urlField.text = _s.raw('ai_base_url_${_provider.id}');
+    _modelField.text = _s.raw('ai_model_${_provider.id}');
+  }
 
   List<String> _initialSelection() {
     final List<String> configured = _ids(_s.raw('ai_model_priority'));
@@ -64,15 +80,19 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
       .where((String id) => id.isNotEmpty)
       .toList();
 
-  AiQuota get _quota => AiQuota(_s);
-
   @override
   void dispose() {
     _keyField.dispose();
+    _urlField.dispose();
+    _modelField.dispose();
     super.dispose();
   }
 
   void _say(String message, {bool error = false}) {
+    // Une réponse réseau peut arriver après la fermeture de la feuille : sans
+    // ce garde-fou, `setState` s'exécute sur un élément désactivé et lève
+    // l'assertion de cycle de vie au moment de quitter les paramètres IA.
+    if (!mounted) return;
     setState(() {
       _message = message;
       _error = error;
@@ -83,54 +103,109 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
     await _s.set('ai_model_priority', _selected.join(','));
   }
 
+  Future<void> _selectProvider(AiProvider provider) async {
+    if (provider == _provider) return;
+    await _cfg.setProvider(provider);
+    if (!mounted) return;
+    setState(() {
+      _provider = provider;
+      _urlField.text = _s.raw('ai_base_url_${provider.id}');
+      _modelField.text = _s.raw('ai_model_${provider.id}');
+      _message = null;
+    });
+  }
+
+  /// Enregistre l'adresse et le modèle du fournisseur courant.
+  Future<bool> _persistEndpoint() async {
+    final String url = _urlField.text.trim();
+    if (url.isNotEmpty && AiProviderSettings.normalizeBaseUrl(url) == null) {
+      _say(
+        'Adresse invalide : attendu http(s)://hôte (ex. '
+        '${_provider.defaultBaseUrl}).',
+        error: true,
+      );
+      return false;
+    }
+    await _cfg.setBaseUrl(_provider, url);
+    if (!_provider.isGemini) {
+      await _cfg.setModel(_provider, _modelField.text);
+    }
+    return true;
+  }
+
   Future<bool> _refreshModels({String? key}) async {
     final String? apiKey = key ?? await _vault.read();
-    if (apiKey == null) {
-      _say('Enregistrez d’abord une clé API.', error: true);
+    if (_provider.requiresKey && (apiKey == null || apiKey.isEmpty)) {
+      _say('Enregistrez d’abord une clé ${_provider.label}.', error: true);
+      return false;
+    }
+    if (_cfg.hasInvalidBaseUrl(_provider)) {
+      _say('Adresse invalide : corrigez-la avant de tester.', error: true);
       return false;
     }
     setState(() => _busy = true);
-    final AiModelsFetch fetch = await fetchAiModels(apiKey);
+    final AiModelsFetch fetch = await fetchAiModels(
+      provider: _provider,
+      baseUrl: _cfg.baseUrl(_provider),
+      apiKey: apiKey,
+    );
     if (!mounted) return false;
     if (!fetch.ok) {
       setState(() => _busy = false);
       _say(fetch.note, error: true);
       return false;
     }
-    await _s.set('ai_models_cache', AiModelCatalog.encode(fetch.models));
-    await _s.set('ai_models_cached_at', DateTime.now().toIso8601String());
-    final Set<String> known = fetch.models.map((AiModel m) => m.id).toSet();
-    final List<String> kept = _selected
-        .where((String id) => known.contains(id))
-        .toList();
-    for (final AiModel model in fetch.models) {
-      if (!kept.contains(model.id)) kept.add(model.id);
+
+    List<String> kept = _selected;
+    if (_provider.isGemini) {
+      // Le catalogue et la priorité ne concernent que Gemini : les API
+      // compatibles OpenAI n'ont qu'un modèle choisi.
+      final Set<String> known = fetch.models.map((AiModel m) => m.id).toSet();
+      kept = _selected.where((String id) => known.contains(id)).toList();
+      for (final AiModel model in fetch.models) {
+        if (!kept.contains(model.id)) kept.add(model.id);
+      }
+      await _s.set('ai_models_cache', AiModelCatalog.encode(fetch.models));
+      await _s.set('ai_models_cached_at', DateTime.now().toIso8601String());
     }
+    if (!mounted) return false;
     setState(() {
       _catalog = fetch.models;
       _selected = kept;
       _busy = false;
     });
-    await _persistSelection();
+    if (_provider.isGemini) await _persistSelection();
     _say(fetch.note);
     return true;
   }
 
-  Future<void> _saveKey() async {
-    final String raw = _keyField.text;
-    final String? problem = AiKeyVault.validate(raw);
-    if (problem != null) {
-      _say(problem, error: true);
+  Future<void> _save() async {
+    final String raw = _keyField.text.trim();
+    if (raw.isNotEmpty) {
+      final String? problem = AiKeyVault.validate(raw);
+      if (problem != null) {
+        _say(problem, error: true);
+        return;
+      }
+    } else if (_provider.requiresKey && !_vault.isConfigured) {
+      _say('Collez la clé fournie par ${_provider.label}.', error: true);
       return;
     }
+
     setState(() => _busy = true);
     try {
-      await _vault.save(raw);
-      _keyField.clear();
+      if (raw.isNotEmpty) await _vault.save(raw);
+      final bool endpointOk = await _persistEndpoint();
       if (!mounted) return;
       setState(() => _busy = false);
-      _say('Clé enregistrée, chiffrée localement. Vérification en cours…');
-      await _refreshModels(key: raw.trim());
+      if (!endpointOk) return;
+      _keyField.clear();
+      _say(
+        raw.isNotEmpty
+            ? 'Clé enregistrée, chiffrée localement. Vérification en cours…'
+            : 'Réglages enregistrés. Vérification en cours…',
+      );
+      await _refreshModels(key: raw.isNotEmpty ? raw : null);
     } on AiKeyException catch (error) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -173,6 +248,7 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
     final AkibaColors c = AkibaColors.of(context);
     final bool configured = _vault.isConfigured;
     final DateTime? updated = _vault.updatedAt;
+    final bool keyOptional = !_provider.requiresKey;
     final DateTime? cachedAt = DateTime.tryParse(_s.raw('ai_models_cached_at'));
 
     return ConstrainedBox(
@@ -215,7 +291,7 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
                                 ),
                               ),
                               Text(
-                                'Clé, modèles et priorité',
+                                'Fournisseur, clé et modèles',
                                 style: AkibaTypography.sectionTitle.copyWith(
                                   fontSize: 18,
                                   color: c.textPrimary,
@@ -233,7 +309,50 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
                     ),
                     const SizedBox(height: AkibaSpacing.md),
 
-                    // -------------------------------------------- Clé API
+                    // --------------------------------------- Fournisseur
+                    _card(
+                      c,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          Text(
+                            'Fournisseur',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: c.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: AkibaSpacing.xs),
+                          Text(
+                            'Un seul fournisseur actif. Chaque clé et chaque '
+                            'adresse restent enregistrées séparément.',
+                            style: AkibaTypography.legend.copyWith(
+                              color: c.textMuted,
+                              height: 1.4,
+                            ),
+                          ),
+                          const SizedBox(height: AkibaSpacing.sm),
+                          RadioGroup<AiProvider>(
+                            groupValue: _provider,
+                            onChanged: (AiProvider? value) {
+                              if (value != null) _selectProvider(value);
+                            },
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: <Widget>[
+                                for (final AiProvider provider
+                                    in AiProvider.values)
+                                  _providerRow(c, provider),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: AkibaSpacing.lg),
+
+                    // ------------------------------------- Clé / adresse
                     _card(
                       c,
                       child: Column(
@@ -252,9 +371,11 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
                               Expanded(
                                 child: Text(
                                   configured
-                                      ? 'Clé enregistrée · '
+                                      ? 'Clé ${_provider.label} enregistrée · '
                                             '${AiKeyVault.maskedLabel}'
-                                      : 'Aucune clé enregistrée',
+                                      : keyOptional
+                                      ? 'Jeton facultatif pour ${_provider.label}'
+                                      : 'Aucune clé ${_provider.label}',
                                   style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w600,
@@ -285,7 +406,9 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
                             decoration: InputDecoration(
                               hintText: configured
                                   ? 'Coller une nouvelle clé pour remplacer'
-                                  : 'Coller la clé fournie par le service',
+                                  : keyOptional
+                                  ? 'Jeton si l’instance en exige un'
+                                  : 'Coller la clé ${_provider.label}',
                               filled: true,
                               fillColor: c.surfaceElevated,
                               suffixIcon: IconButton(
@@ -310,21 +433,67 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
                             ),
                           ),
                           const SizedBox(height: AkibaSpacing.sm),
+                          TextField(
+                            controller: _urlField,
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            keyboardType: TextInputType.url,
+                            decoration: InputDecoration(
+                              labelText: 'Adresse (endpoint)',
+                              hintText: _provider.defaultBaseUrl,
+                              helperText: 'Vide = ${_provider.defaultBaseUrl}',
+                              helperMaxLines: 2,
+                              filled: true,
+                              fillColor: c.surfaceElevated,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(
+                                  AkibaRadii.field,
+                                ),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                          ),
+                          if (!_provider.isGemini) ...<Widget>[
+                            const SizedBox(height: AkibaSpacing.sm),
+                            TextField(
+                              controller: _modelField,
+                              autocorrect: false,
+                              enableSuggestions: false,
+                              decoration: InputDecoration(
+                                labelText: 'Modèle',
+                                hintText: _provider.defaultModel,
+                                helperText:
+                                    'Vide = ${_provider.defaultModel}. '
+                                    'Un seul modèle est essayé.',
+                                helperMaxLines: 2,
+                                filled: true,
+                                fillColor: c.surfaceElevated,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    AkibaRadii.field,
+                                  ),
+                                  borderSide: BorderSide.none,
+                                ),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: AkibaSpacing.sm),
                           Wrap(
                             spacing: AkibaSpacing.sm,
                             runSpacing: AkibaSpacing.sm,
                             children: <Widget>[
                               FilledButton.icon(
-                                onPressed: _busy ? null : _saveKey,
+                                onPressed: _busy ? null : _save,
                                 icon: const Icon(Icons.lock_rounded, size: 18),
                                 label: Text(
                                   configured
-                                      ? 'Remplacer et tester'
-                                      : 'Enregistrer et tester',
+                                      ? 'Enregistrer et tester'
+                                      : 'Configurer et tester',
                                 ),
                               ),
                               OutlinedButton.icon(
-                                onPressed: _busy || !configured
+                                onPressed:
+                                    _busy || (!configured && !keyOptional)
                                     ? null
                                     : () async {
                                         setState(() => _busy = true);
@@ -332,9 +501,7 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
                                         if (!mounted) return;
                                         setState(() => _busy = false);
                                         if (ok) {
-                                          _say(
-                                            'Clé valide, modèles récupérés.',
-                                          );
+                                          _say('Connexion vérifiée.');
                                         }
                                       },
                                 icon: const Icon(
@@ -391,70 +558,76 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
                     ),
                     const SizedBox(height: AkibaSpacing.lg),
 
-                    // --------------------------------------------- Modèles
-                    _card(
-                      c,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: <Widget>[
-                          Row(
-                            children: <Widget>[
-                              Expanded(
-                                child: Text(
-                                  'Modèles et priorité',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: c.textPrimary,
+                    // ------------------------------ Modèles (Gemini seul)
+                    if (_provider.isGemini) ...<Widget>[
+                      _card(
+                        c,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: <Widget>[
+                            Row(
+                              children: <Widget>[
+                                Expanded(
+                                  child: Text(
+                                    'Modèles et priorité',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: c.textPrimary,
+                                    ),
                                   ),
                                 ),
+                                if (cachedAt != null)
+                                  Text(
+                                    'liste du ${AkibaDate.short(cachedAt)}',
+                                    style: AkibaTypography.legend.copyWith(
+                                      color: c.textMuted,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: AkibaSpacing.xs),
+                            Text(
+                              'Essais dans cet ordre, un seul appel par '
+                              'modèle. Un modèle en échec deux fois passe en '
+                              'veille 10 minutes.',
+                              style: AkibaTypography.legend.copyWith(
+                                color: c.textMuted,
+                                height: 1.4,
                               ),
-                              if (cachedAt != null)
-                                Text(
-                                  'liste du ${AkibaDate.short(cachedAt)}',
-                                  style: AkibaTypography.legend.copyWith(
-                                    color: c.textMuted,
-                                    fontSize: 11,
-                                  ),
+                            ),
+                            const SizedBox(height: AkibaSpacing.md),
+                            for (final AiModel model in _catalog)
+                              _modelRow(c, model),
+                            const SizedBox(height: AkibaSpacing.sm),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: OutlinedButton.icon(
+                                onPressed:
+                                    _busy || (!configured && !keyOptional)
+                                    ? null
+                                    : () async {
+                                        setState(() => _busy = true);
+                                        await _refreshModels();
+                                        if (mounted) {
+                                          setState(() => _busy = false);
+                                        }
+                                      },
+                                icon: const Icon(
+                                  Icons.refresh_rounded,
+                                  size: 18,
                                 ),
-                            ],
-                          ),
-                          const SizedBox(height: AkibaSpacing.xs),
-                          Text(
-                            'Essais dans cet ordre, un seul appel par modèle. '
-                            'Un modèle en échec deux fois passe en veille '
-                            '10 minutes.',
-                            style: AkibaTypography.legend.copyWith(
-                              color: c.textMuted,
-                              height: 1.4,
+                                label: const Text('Actualiser la liste'),
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: AkibaSpacing.md),
-                          for (final AiModel model in _catalog)
-                            _modelRow(c, model),
-                          const SizedBox(height: AkibaSpacing.sm),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: OutlinedButton.icon(
-                              onPressed: _busy || !configured
-                                  ? null
-                                  : () async {
-                                      setState(() => _busy = true);
-                                      await _refreshModels();
-                                      if (mounted) {
-                                        setState(() => _busy = false);
-                                      }
-                                    },
-                              icon: const Icon(Icons.refresh_rounded, size: 18),
-                              label: const Text('Actualiser la liste'),
-                            ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: AkibaSpacing.lg),
+                      const SizedBox(height: AkibaSpacing.lg),
+                    ],
 
-                    // --------------------------------------------- Délais
+                    // -------------------------------------------- Délais
                     _card(
                       c,
                       child: Column(
@@ -644,6 +817,52 @@ class _AiSettingsSheetState extends State<_AiSettingsSheet> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _providerRow(AkibaColors c, AiProvider provider) {
+    final bool selected = provider == _provider;
+    final bool keyReady = AiKeyVault(_s, provider: provider).isConfigured;
+    return InkWell(
+      onTap: () => _selectProvider(provider),
+      borderRadius: BorderRadius.circular(AkibaRadii.field),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: AkibaSpacing.xs),
+        child: Row(
+          children: <Widget>[
+            Radio<AiProvider>(value: provider),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    provider.label,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: selected ? c.textPrimary : c.textMuted,
+                    ),
+                  ),
+                  Text(
+                    provider.requiresKey
+                        ? '${provider.detail} · '
+                              '${keyReady ? 'clé enregistrée' : 'clé requise'}'
+                        : provider.detail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AkibaTypography.legend.copyWith(
+                      color: c.textMuted,
+                      fontSize: 10.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (selected)
+              Icon(Icons.check_circle_rounded, size: 18, color: c.success),
+          ],
         ),
       ),
     );

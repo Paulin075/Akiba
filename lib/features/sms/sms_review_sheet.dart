@@ -14,9 +14,11 @@ import '../../data/models/transaction_record.dart';
 
 /// Revue des SMS financiers.
 ///
-/// IMPORTANT : la lecture automatique de la boîte SMS exige le module Android
-/// et une autorisation explicite. Ici, le texte est collé ou saisi, puis chaque
-/// message est classé à la main. Rien n'est enregistré automatiquement.
+/// La détection automatique (Flooz, Mixx by Yas, banques) vit dans le récepteur
+/// Android : elle ouvre la fiche préremplie et ne notifie jamais avec un
+/// montant. Cette feuille reste le chemin manuel : le texte est collé ou
+/// saisi, puis chaque message est classé à la main. Rien n'est enregistré
+/// automatiquement.
 Future<void> openSmsReview(
   BuildContext context, {
   required AkibaStore store,
@@ -451,7 +453,12 @@ class _SmsCard extends StatelessWidget {
           ),
           const SizedBox(height: AkibaSpacing.md),
           DropdownButtonFormField<String>(
-            initialValue: row.accountId,
+            // Si la ligne référence un compte absent de la liste (compte
+            // supprimé entre deux ouvertures), on retombe sur le premier :
+            // sinon Flutter lève l'assertion « exactly one item ».
+            initialValue: accounts.any((Account a) => a.id == row.accountId)
+                ? row.accountId
+                : (accounts.isEmpty ? null : accounts.first.id),
             decoration: InputDecoration(
               filled: true,
               fillColor: c.surfaceElevated,

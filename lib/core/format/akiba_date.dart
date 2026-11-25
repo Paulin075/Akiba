@@ -1,6 +1,7 @@
-/// Formatage des dates AKIBA (français, fuseau de l'appareil).
+/// Formatage des dates AKIBA (fuseau de l'appareil).
 ///
 /// Dates `jj/mm/aaaa`, heures `HH h mm`, conformément au cahier des charges.
+/// Mois et jours suivent la langue active (`AkibaDate.english`).
 abstract final class AkibaDate {
   static const List<String> _weekdays = <String>[
     'lundi',
@@ -10,6 +11,16 @@ abstract final class AkibaDate {
     'vendredi',
     'samedi',
     'dimanche',
+  ];
+
+  static const List<String> _weekdaysEn = <String>[
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
   ];
 
   static const List<String> _months = <String>[
@@ -27,8 +38,31 @@ abstract final class AkibaDate {
     'décembre',
   ];
 
-  /// « Mercredi 19 novembre ».
+  static const List<String> _monthsEn = <String>[
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+
+  /// Langue des dates. Positions synchronisées par le build racine, comme
+  /// `AkibaMoney.currency` et `isoStyle` : aucun contexte requis.
+  static bool english = false;
+
+  /// « Mercredi 19 novembre » (ou « Wednesday 19 November »).
   static String long(DateTime date) {
+    if (english) {
+      return '${_weekdaysEn[date.weekday - 1]} ${date.day} '
+          '${_monthsEn[date.month - 1]}';
+    }
     final String day = _weekdays[date.weekday - 1];
     return '${day[0].toUpperCase()}${day.substring(1)} ${date.day} '
         '${_months[date.month - 1]}';
@@ -56,8 +90,8 @@ abstract final class AkibaDate {
       reference.day,
     ).difference(DateTime(local.year, local.month, local.day)).inDays;
     return switch (days) {
-      0 => "Aujourd'hui",
-      1 => 'Hier',
+      0 => english ? 'Today' : "Aujourd'hui",
+      1 => english ? 'Yesterday' : 'Hier',
       _ => short(local),
     };
   }

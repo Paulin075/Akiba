@@ -41,13 +41,20 @@ app.*.map.json
 
 # Identifiants OAuth Google (client_secret_*.json téléchargé depuis Google
 # Cloud Console et définitions de compilation associées). Jamais versionnés :
-# l'identifiant est fourni au build par
-# `flutter run --dart-define-from-file=secrets/google_oauth.json`.
+# l'identifiant est lu à l'exécution depuis `secrets/google_oauth.json`
+# (ordinateur) ou depuis la copie embarquée (Android/iOS).
 /secrets/
 client_secret_*.json
 **/client_secret_*.json
+
+# Copie embarquée des identifiants OAuth, écrite par la tâche Gradle
+# `syncOAuthSecrets` avant chaque build Android. Elle ne doit jamais être
+# versionnée : `assets/config/` reste suivi grâce au `.gitkeep`.
+/assets/config/google_oauth.json
 
 # Android Studio will place build artifacts here
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
+/android/.gradle/

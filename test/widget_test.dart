@@ -27,9 +27,10 @@ void main() {
   ) async {
     await tester.pumpWidget(const AkibaApp());
     await tester.pump();
-    // Le splash dure 1,25 s, puis l'onboarding prend le relais.
-    await tester.pump(const Duration(milliseconds: 1500));
-    await tester.pump(const Duration(milliseconds: 300));
+    // L'ouverture ne montre que l'animation cochon + cauri, 1 s, puis
+    // l'onboarding prend le relais.
+    await tester.pump(const Duration(milliseconds: 1100));
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('Bienvenue dans AKIBA'), findsOneWidget);
     expect(find.text('Étape 1 sur 11'), findsOneWidget);

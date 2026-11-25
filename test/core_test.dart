@@ -14,9 +14,11 @@ import 'package:akiba/core/ai/ai_quota.dart';
 import 'package:akiba/core/format/akiba_currency.dart';
 import 'package:akiba/core/format/akiba_money.dart';
 import 'package:akiba/core/backup/backup_service.dart';
+import 'package:akiba/core/config/google_oauth_config.dart';
 import 'package:akiba/core/database/akiba_database.dart';
 import 'package:akiba/core/database/akiba_secure_key.dart';
 import 'package:akiba/core/notifications/reminder_planner.dart';
+import 'package:akiba/core/notifications/background_reminders.dart';
 import 'package:akiba/core/security/pin_vault.dart';
 import 'package:akiba/core/sms/sms_parser.dart';
 import 'package:akiba/core/state/akiba_settings.dart';
@@ -135,6 +137,15 @@ void main() {
   });
 
   group('Rappels locaux', () {
+    test('le rappel de dépenses est borné et ne révèle aucun montant', () {
+      expect(expenseMessageFor(DateTime(2026, 11, 20, 16, 59)), isNull);
+      final String? message = expenseMessageFor(DateTime(2026, 11, 20, 17));
+      expect(message, isNotNull);
+      expect(message, isNot(contains('FCFA')));
+      expect(message, isNot(contains('XOF')));
+      expect(expenseMessageFor(DateTime(2026, 11, 20, 20)), isNull);
+    });
+
     test('l’heure se lit sans erreur', () {
       expect(ReminderPlanner.parseTime('07:30'), (hour: 7, minute: 30));
       expect(ReminderPlanner.parseTime('99:99'), (hour: 23, minute: 59));
@@ -237,6 +248,106 @@ void main() {
 
       expect(plans.single.festive, isTrue);
       expect(plans.single.title, 'Fêtes de fin d’année');
+    });
+  });
+
+  group('Requête OAuth Google pour application installée', () {
+    test('emploie un loopback racine et les paramètres OAuth supportés', () {
+      final Uri request = GoogleOAuthConfig.authorizationUri(
+        port: 49152,
+        codeChallenge: 'pkce-challenge',
+        state: 'csrf-state',
+      );
+      final Map<String, String> query = request.queryParameters;
+
+      expect(request.origin, 'https://accounts.google.com');
+      expect(request.path, '/o/oauth2/v2/auth');
+      // Un identifiant vide n'est jamais envoyé (`client_id=` déclenche
+      // « invalid_request ») : la clé est alors absente de la requête.
+      if (GoogleOAuthConfig.clientId.isEmpty) {
+        expect(query.containsKey('client_id'), isFalse);
+      } else {
+        expect(query['client_id'], GoogleOAuthConfig.clientId);
+      }
+      expect(query['redirect_uri'], 'http://127.0.0.1:49152');
+      expect(query['response_type'], 'code');
+      expect(
+        query['scope'],
+        contains('https://www.googleapis.com/auth/drive.appdata'),
+      );
+      expect(query['code_challenge'], 'pkce-challenge');
+      expect(query['code_challenge_method'], 'S256');
+      expect(query['state'], 'csrf-state');
+      expect(
+        query.keys,
+        containsAll(<String>[
+          'redirect_uri',
+          'response_type',
+          'scope',
+          'code_challenge',
+          'code_challenge_method',
+          'state',
+        ]),
+      );
+      expect(query.containsKey('include_granted_scopes'), isFalse);
+      // `access_type=offline` + `prompt=consent` garantissent le jeton de
+      // rafraîchissement, sans quoi la sauvegarde Drive échouerait juste après
+      // une connexion pourtant réussie.
+      expect(query['access_type'], 'offline');
+      expect(query['prompt'], 'consent');
+    });
+
+    test('les espaces du scope partent en %20, jamais en +', () {
+      final Uri request = GoogleOAuthConfig.authorizationUri(
+        port: 49152,
+        codeChallenge: 'pkce-challenge',
+        state: 'csrf-state',
+      );
+
+      // `Uri.queryParameters` encode l'espace en « + » : Google peut refuser
+      // cette forme. On vérifie la chaîne réellement envoyée.
+      expect(request.query.contains('+'), isFalse);
+      expect(request.query, contains('openid%20email%20'));
+      expect(
+        request.queryParameters['scope'],
+        GoogleOAuthConfig.scopes.join(' '),
+      );
+      expect(
+        request.queryParameters['redirect_uri'],
+        GoogleOAuthConfig.redirectUri(49152),
+      );
+    });
+
+    test('la redirection loopback est exactement http://127.0.0.1:port', () {
+      expect(GoogleOAuthConfig.redirectUri(51234), 'http://127.0.0.1:51234');
+    });
+
+    test('les identifiants locaux sont chargés puis nettoyés', () async {
+      final Directory dir = Directory.systemTemp.createTempSync('akiba_oauth');
+      final File file = File(p.join(dir.path, 'google_oauth.json'));
+      file.writeAsStringSync(
+        jsonEncode(<String, String>{
+          'AKIBA_GOOGLE_CLIENT_ID': '  123-abc.apps.googleusercontent.com \n',
+          'AKIBA_GOOGLE_CLIENT_SECRET': '',
+        }),
+      );
+
+      await GoogleOAuthConfig.load(devPath: file.path);
+
+      expect(GoogleOAuthConfig.clientId, '123-abc.apps.googleusercontent.com');
+      expect(GoogleOAuthConfig.isConfigured, isTrue);
+      expect(GoogleOAuthConfig.clientSecret, isEmpty);
+
+      // Un identifiant qui n'est pas un client Google n'ouvre rien.
+      file.writeAsStringSync(
+        jsonEncode(<String, String>{'AKIBA_GOOGLE_CLIENT_ID': 'pas-un-client'}),
+      );
+      await GoogleOAuthConfig.load(devPath: file.path);
+      expect(GoogleOAuthConfig.isConfigured, isFalse);
+
+      // Fichier absent : aucune exception, repli propre.
+      await GoogleOAuthConfig.load(devPath: p.join(dir.path, 'absent.json'));
+      dir.deleteSync(recursive: true);
     });
   });
 
@@ -367,8 +478,9 @@ void main() {
         'Yuan',
       ]);
       for (final AkibaCurrency currency in AkibaCurrency.values) {
-        expect(currency.logoUrl, startsWith('https://'));
-        expect(currency.logoUrl, contains(currency.region));
+        // Le drapeau est embarqué : aucun accès réseau pour l'afficher.
+        expect(currency.assetPath, startsWith('assets/logos/currencies/'));
+        expect(currency.assetPath, contains(currency.region));
         expect(currency.symbol, isNotEmpty);
       }
     });
@@ -547,6 +659,39 @@ void main() {
       expect(settings['pin_hash'], isNull);
       expect(settings['notif_morning'], '1');
     });
+
+    test(
+      'restauration automatique avec le même compte Google sur nouvel appareil',
+      () async {
+        final BackupService freshDevice = BackupService(store);
+        final Map<String, dynamic> envelope = await freshDevice.createEnvelope(
+          deviceId: 'poste-1',
+          googleAccountId: 'google-sub-stable-123',
+        );
+        expect(envelope['kdf'], 'PBKDF2-HMAC-SHA256');
+        expect(envelope['salt'], isA<String>());
+
+        // Aucune clé locale préexistante : la même identité et le sel de
+        // l'enveloppe suffisent à retrouver la clé AES-256-GCM.
+        final BackupService reinstalled = BackupService(store);
+        final Map<String, dynamic> payload = await reinstalled.decryptEnvelope(
+          envelope,
+          googleAccountId: 'google-sub-stable-123',
+        );
+        expect((payload['transactions'] as List<dynamic>).length, 1);
+        expect(
+          () => reinstalled.decryptEnvelope(
+            envelope,
+            googleAccountId: 'autre-compte',
+          ),
+          throwsA(isA<BackupException>()),
+        );
+        expect(
+          () => reinstalled.decryptEnvelope(envelope),
+          throwsA(isA<BackupException>()),
+        );
+      },
+    );
 
     test('une clé d’un autre appareil est refusée', () async {
       final Map<String, dynamic> envelope = await service.createEnvelope(

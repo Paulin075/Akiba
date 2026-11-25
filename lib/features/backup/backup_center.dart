@@ -130,9 +130,60 @@ class _BackupSheetState extends State<_BackupSheet> {
         'applicatif du Drive.',
       );
     } on GoogleAuthException catch (error) {
+      // Repli explicite : la sauvegarde par dossier Drive synchronisé reste
+      // disponible, l'application n'est jamais bloquée.
+      _show(
+        '${error.message} Repli possible : renseignez le dossier Google Drive '
+        'synchronisé ci-dessous, la sauvegarde chiffrée y sera déposée.',
+        error: true,
+      );
+    } catch (error) {
+      _show(
+        'Connexion Google impossible (${error.runtimeType}). Repli : dossier '
+        'Google Drive synchronisé.',
+        error: true,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// « Tester la connexion » du Home Lab : lecture seule, sans écriture.
+  ///
+  /// L'adresse est d'abord normalisée (IP seule, `ip:port`, nom local ou URL
+  /// complète). Une adresse inutilisable est refusée **avant** tout appel
+  /// réseau, avec un exemple concret, au lieu d'une erreur générique.
+  Future<void> _testLab() async {
+    if (_busy) return;
+    final String? normalized = BackupService.normalizeUrl(_labUrl.text);
+    if (normalized == null) {
+      _show(
+        'Adresse invalide : utilisez par exemple 192.168.1.80:8080 ou '
+        'https://akiba.local/backup.',
+        error: true,
+      );
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = null;
+      _isError = false;
+    });
+    try {
+      // L'adresse normalisée est celle qui est enregistrée et testée : la
+      // sauvegarde suivante utilise exactement la même URL.
+      _labUrl.text = normalized;
+      await _persistTargetSettings();
+      final HomeLabProbe probe = await _service.probeRemote(
+        url: normalized,
+        token: _labToken.text,
+      );
+      if (!mounted) return;
+      _show(probe.message, error: !probe.ok);
+    } on BackupException catch (error) {
       _show(error.message, error: true);
     } catch (error) {
-      _show('Connexion Google impossible (${error.runtimeType}).', error: true);
+      _show('Test impossible (${error.runtimeType}).', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -227,6 +278,7 @@ class _BackupSheetState extends State<_BackupSheet> {
       _stage.value = BackupStage.preparing;
       final Map<String, dynamic> envelope = await _service.createEnvelope(
         deviceId: 'akiba-${widget.settings.timezone}',
+        googleAccountId: await _google.currentAccountId(),
         onStage: (BackupStage stage) => _stage.value = stage,
       );
 
@@ -347,6 +399,7 @@ class _BackupSheetState extends State<_BackupSheet> {
       _stage.value = BackupStage.decrypting;
       final Map<String, int> restored = await _service.restore(
         remote,
+        googleAccountId: await _google.currentAccountId(),
         onStage: (BackupStage stage) => _stage.value = stage,
       );
       widget.revision.bump();
@@ -465,7 +518,7 @@ class _BackupSheetState extends State<_BackupSheet> {
                             child: Text(
                               _driveApi
                                   ? 'Compte Google lié : $_googleEmail'
-                                  : GoogleOAuthConfig.isConfigured
+                                  : GoogleOAuthConfig.canSignIn
                                   ? 'Identifiants OAuth prêts, compte non lié'
                                   : 'Se connecter avec Google (identifiants à '
                                         'ajouter)',
@@ -479,19 +532,16 @@ class _BackupSheetState extends State<_BackupSheet> {
                         ],
                       ),
                       const SizedBox(height: AkibaSpacing.sm),
-                      if (!GoogleOAuthConfig.isConfigured)
+                      if (!GoogleOAuthConfig.canSignIn)
                         Text(
-                          'Collez votre identifiant OAuth dans '
-                          'secrets/google_oauth.json puis relancez AKIBA avec '
-                          '--dart-define-from-file. En attendant, la sauvegarde '
-                          'fonctionne dans le dossier Drive synchronisé de '
-                          'l’appareil, sans connexion Google.',
+                          '${GoogleOAuthConfig.setupHint} '
+                          '${GoogleOAuthConfig.androidHint}',
                           style: AkibaTypography.legend.copyWith(
                             color: c.textMuted,
                             height: 1.45,
                           ),
                         ),
-                      if (GoogleOAuthConfig.isConfigured && !_driveApi)
+                      if (!_driveApi)
                         Align(
                           alignment: Alignment.centerLeft,
                           child: FilledButton.icon(
@@ -525,9 +575,10 @@ class _BackupSheetState extends State<_BackupSheet> {
                                   '« Mon Drive »). Google ne voit que du '
                                   'chiffré ; les cinq dernières sauvegardes '
                                   'sont conservées.'
-                            : 'Sans connexion Google, AKIBA écrit un fichier '
-                                  '.akiba chiffré dans le dossier Drive '
-                                  'synchronisé de l’appareil.',
+                            : 'Connectez le même compte Google pour créer ou '
+                                  'restaurer une sauvegarde portable. Le fichier '
+                                  '.akiba peut ensuite être copié dans ce dossier '
+                                  'synchronisé.',
                         style: AkibaTypography.legend.copyWith(
                           color: c.textMuted,
                           height: 1.45,
@@ -536,9 +587,12 @@ class _BackupSheetState extends State<_BackupSheet> {
                     ] else ...<Widget>[
                       TextField(
                         controller: _labUrl,
+                        keyboardType: TextInputType.url,
+                        autocorrect: false,
+                        enableSuggestions: false,
                         decoration: _field(
                           c,
-                          'URL Home Lab (https://192.168.x.x:8080/akiba/backup)',
+                          'Serveur Home Lab (192.168.1.80:8080 ou https://…)',
                         ),
                       ),
                       const SizedBox(height: AkibaSpacing.sm),
@@ -551,13 +605,49 @@ class _BackupSheetState extends State<_BackupSheet> {
                       Text(
                         'Home Lab seulement : même Wi-Fi, sans VPN. Le jeton '
                         'est envoyé en en-tête Bearer et jamais dans l’URL. '
-                        'Android refuse le HTTP en clair : utilisez HTTPS ou un '
-                        'certificat local. « Vérifier » lit la sauvegarde sans '
-                        'rien écrire.',
+                        'Une IP seule ou « IP:port » suffit : http:// est ajouté '
+                        'automatiquement. « Tester la connexion » lit la '
+                        'sauvegarde sans rien écrire.',
                         style: AkibaTypography.legend.copyWith(
                           color: c.textMuted,
                           height: 1.45,
                         ),
+                      ),
+                      const SizedBox(height: AkibaSpacing.sm),
+                      // Actif dès que l'adresse du serveur est saisie.
+                      ListenableBuilder(
+                        listenable: _labUrl,
+                        builder: (BuildContext context, Widget? _) {
+                          final bool ready =
+                              _labUrl.text.trim().isNotEmpty && !_busy;
+                          return Row(
+                            children: <Widget>[
+                              OutlinedButton.icon(
+                                onPressed: ready ? _testLab : null,
+                                icon: const Icon(
+                                  Icons.wifi_tethering_rounded,
+                                  size: 18,
+                                ),
+                                label: const Text('Tester la connexion'),
+                              ),
+                              const SizedBox(width: AkibaSpacing.sm),
+                              Expanded(
+                                child: Text(
+                                  ready
+                                      ? 'Lecture seule : le serveur est '
+                                            'interrogé sans rien écrire.'
+                                      : 'Saisissez l’URL du serveur pour '
+                                            'tester la connexion.',
+                                  style: AkibaTypography.legend.copyWith(
+                                    color: c.textMuted,
+                                    fontSize: 11,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                     const SizedBox(height: AkibaSpacing.lg),
@@ -568,10 +658,11 @@ class _BackupSheetState extends State<_BackupSheet> {
                         const SizedBox(width: AkibaSpacing.sm),
                         Expanded(
                           child: Text(
-                            'Chiffrement automatique AES-256-GCM avec la clé '
-                            'de cet appareil (coffre du système). Aucune phrase '
-                            'secrète à retenir, aucun montant en clair dans le '
-                            'fichier envoyé.',
+                            'Chiffrement automatique AES-256-GCM. La clé est '
+                            'dérivée du compte Google connecté et d’un sel '
+                            'aléatoire; aucune clé à retenir ou saisir. Protégez '
+                            'l’accès à votre compte Google. Aucun montant en clair '
+                            'dans le fichier envoyé.',
                             style: AkibaTypography.legend.copyWith(
                               color: c.textMuted,
                               height: 1.45,

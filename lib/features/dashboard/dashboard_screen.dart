@@ -5,6 +5,7 @@ import '../../core/format/akiba_money.dart';
 import '../../core/format/transaction_display.dart';
 import '../../core/profile/profile_photo.dart';
 import '../../core/state/akiba_data_revision.dart';
+import '../../core/state/akiba_l10n.dart';
 import '../../core/state/akiba_settings.dart';
 import '../../core/state/masked_amounts.dart';
 import '../../core/theme/akiba_colors.dart';
@@ -59,19 +60,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant DashboardScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.store, widget.store)) _reload();
+  }
+
+  @override
   void dispose() {
     widget.revision.removeListener(_reload);
     super.dispose();
   }
 
+  /// Relit la base après chaque écriture (revision.bump).
+  ///
+  /// Le callback de `setState` doit être **synchrone** : lui rendre un `Future`
+  /// (forme `setState(() => _snapshot = store.loadDashboard())`) lève
+  /// « setState() callback argument returned a Future » et laisse le solde
+  /// figé. On crée donc le Future avant, puis on l'affecte dans un bloc.
   void _reload() {
     if (!mounted) return;
-    setState(() => _snapshot = widget.store.loadDashboard());
+    final Future<DashboardSnapshot> next = widget.store.loadDashboard();
+    setState(() {
+      _snapshot = next;
+    });
   }
 
   Future<void> _refresh() async {
     final Future<DashboardSnapshot> next = widget.store.loadDashboard();
-    setState(() => _snapshot = next);
+    if (mounted) {
+      setState(() {
+        _snapshot = next;
+      });
+    }
     await next;
   }
 
@@ -81,7 +101,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text('$label — prévu en $phase.'),
+          content: Text(
+            AkibaL10n.tr('planned_in', <String, String>{
+              'label': label,
+              'phase': phase,
+            }),
+          ),
           backgroundColor: c.textPrimary,
           duration: const Duration(seconds: 2),
         ),
@@ -120,10 +145,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: const Text('Mouvement supprimé'),
+          content: Text(AkibaL10n.tr('movement_deleted')),
           duration: const Duration(seconds: 5),
           action: SnackBarAction(
-            label: 'Annuler',
+            label: AkibaL10n.tr('cancel'),
             onPressed: () async {
               await widget.store.saveTransaction(line.transaction);
               widget.revision.bump();
@@ -162,7 +187,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               final Widget header = _Header(
                 masked: masked,
                 onToggleMasked: () => MaskedAmounts.toggle(context),
-                themeTooltip: 'Apparence : $_themeLabel',
+                themeTooltip: AkibaL10n.tr(
+                  'appearance_tooltip',
+                  <String, String>{'theme': _themeLabel},
+                ),
                 onCycleTheme: _cycleTheme,
               );
 
@@ -277,13 +305,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        const _SectionHeader(title: 'Aperçu IA'),
+        _SectionHeader(title: AkibaL10n.tr('ai_preview')),
         const SizedBox(height: AkibaSpacing.md),
         AIInsightCard(
           title: insight.title,
           message: insight.message,
           highlight: insight.highlight,
-          footnote: 'Conseils personnalisés · module M12 (Phase 6)',
+          footnote: AkibaL10n.tr('ai_footnote'),
           onTap: () => _notYet('Assistant IA', 'Phase 6'),
         ),
       ],
@@ -298,20 +326,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (data.recent.isEmpty) {
       return (
-        title: 'Bienvenue dans AKIBA',
-        message:
-            'Touchez le cochon pour enregistrer une première entrée : vos '
-            'tendances et vos conseils apparaîtront ici.',
+        title: AkibaL10n.tr('insight_welcome_title'),
+        message: AkibaL10n.tr('insight_welcome_message'),
         highlight: null,
       );
     }
 
     if (masked) {
       return (
-        title: 'Vos chiffres restent privés',
-        message:
-            'Le masquage est actif : aucun montant ne s’affiche, y compris '
-            'dans cet aperçu.',
+        title: AkibaL10n.tr('insight_masked_title'),
+        message: AkibaL10n.tr('insight_masked_message'),
         highlight: null,
       );
     }
@@ -319,19 +343,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (balance.monthExpense > 0) {
       final String amount = AkibaMoney.format(balance.monthExpense);
       return (
-        title: 'Votre mois en un regard',
-        message:
-            'Vous avez dépensé $amount ce mois-ci, hors argent de tiers. '
-            'Le détail par catégorie est dans Analyses.',
+        title: AkibaL10n.tr('insight_month_title'),
+        message: AkibaL10n.tr('insight_month_message', <String, String>{
+          'amount': amount,
+        }),
         highlight: amount,
       );
     }
 
     return (
-      title: 'Aucune sortie ce mois-ci',
-      message:
-          'Rien n’a été dépensé depuis le début du mois. C’est le bon moment '
-          'pour verser un peu au coffre épargne.',
+      title: AkibaL10n.tr('insight_none_title'),
+      message: AkibaL10n.tr('insight_none_message'),
       highlight: null,
     );
   }
@@ -379,7 +401,7 @@ class _Header extends StatelessWidget {
               ),
               const SizedBox(height: AkibaSpacing.xs),
               Text(
-                'Mon argent',
+                AkibaL10n.tr('my_money'),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: AkibaTypography.screenTitle.copyWith(
@@ -393,7 +415,9 @@ class _Header extends StatelessWidget {
           icon: masked
               ? Icons.visibility_off_rounded
               : Icons.visibility_rounded,
-          tooltip: masked ? 'Afficher les montants' : 'Masquer les montants',
+          tooltip: masked
+              ? AkibaL10n.tr('show_amounts')
+              : AkibaL10n.tr('hide_amounts'),
           onTap: onToggleMasked,
         ),
         const SizedBox(width: AkibaSpacing.sm),
@@ -421,7 +445,7 @@ class _ThirdPartyCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        const _SectionHeader(title: 'Argent de tiers'),
+        _SectionHeader(title: AkibaL10n.tr('third_party')),
         const SizedBox(height: AkibaSpacing.md),
         AkibaSurfaceCard(
           child: Column(
@@ -445,7 +469,9 @@ class _ThirdPartyCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(AkibaRadii.pill),
                     ),
                     child: Text(
-                      hasThirdParty ? 'Isolé' : 'Aucun',
+                      hasThirdParty
+                          ? AkibaL10n.tr('isolated')
+                          : AkibaL10n.tr('none'),
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
@@ -457,8 +483,7 @@ class _ThirdPartyCard extends StatelessWidget {
               ),
               const SizedBox(height: AkibaSpacing.sm),
               Text(
-                'Cet argent transite par vos comptes mais ne vous appartient '
-                'pas : il est exclu du budget, de l’épargne et des statistiques.',
+                AkibaL10n.tr('third_party_note'),
                 style: AkibaTypography.legend.copyWith(
                   color: c.textMuted,
                   height: 1.45,
@@ -468,15 +493,15 @@ class _ThirdPartyCard extends StatelessWidget {
               Container(height: 1, color: c.surfaceElevated),
               const SizedBox(height: AkibaSpacing.sm),
               _MetricRow(
-                label: 'Total des comptes',
+                label: AkibaL10n.tr('total_accounts'),
                 value: AkibaMoney.format(balance.totalAccounts, masked: masked),
               ),
               _MetricRow(
-                label: 'Épargne (coffre)',
+                label: AkibaL10n.tr('savings_vault'),
                 value: AkibaMoney.format(balance.savingsHeld, masked: masked),
               ),
               _MetricRow(
-                label: 'Solde disponible',
+                label: AkibaL10n.tr('available_balance'),
                 value: AkibaMoney.format(balance.available, masked: masked),
                 strong: true,
               ),
@@ -549,14 +574,14 @@ class _QuickActions extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        const _SectionHeader(title: 'Actions rapides'),
+        _SectionHeader(title: AkibaL10n.tr('quick_actions')),
         const SizedBox(height: AkibaSpacing.md),
         Row(
           children: <Widget>[
             Expanded(
               child: QuickActionTile(
                 icon: Icons.south_west_rounded,
-                label: 'Entrée',
+                label: AkibaL10n.tr('entry'),
                 onTap: onEntry,
               ),
             ),
@@ -564,7 +589,7 @@ class _QuickActions extends StatelessWidget {
             Expanded(
               child: QuickActionTile(
                 icon: Icons.north_east_rounded,
-                label: 'Sortie',
+                label: AkibaL10n.tr('expense'),
                 onTap: onExpense,
               ),
             ),
@@ -572,7 +597,7 @@ class _QuickActions extends StatelessWidget {
             Expanded(
               child: QuickActionTile(
                 icon: Icons.swap_horiz_rounded,
-                label: 'Transfert',
+                label: AkibaL10n.tr('transfer'),
                 onTap: onTransfer,
               ),
             ),
@@ -580,7 +605,7 @@ class _QuickActions extends StatelessWidget {
             Expanded(
               child: QuickActionTile(
                 icon: Icons.savings_rounded,
-                label: 'Épargne',
+                label: AkibaL10n.tr('savings'),
                 onTap: onSavings,
               ),
             ),
@@ -615,13 +640,13 @@ class _TransactionsCard extends StatelessWidget {
       children: <Widget>[
         Row(
           children: <Widget>[
-            const Expanded(
-              child: _SectionHeader(title: 'Dernières transactions'),
+            Expanded(
+              child: _SectionHeader(title: AkibaL10n.tr('latest_transactions')),
             ),
             TextButton(
               onPressed: onSeeAll,
               style: TextButton.styleFrom(foregroundColor: c.terracottaDeep),
-              child: const Text('Voir tout'),
+              child: Text(AkibaL10n.tr('see_all')),
             ),
           ],
         ),
@@ -643,13 +668,13 @@ class _TransactionsCard extends StatelessWidget {
                     background: _SwipeBackground(
                       color: c.ochre,
                       icon: Icons.edit_rounded,
-                      label: 'Modifier',
+                      label: AkibaL10n.tr('edit'),
                       alignLeft: true,
                     ),
                     secondaryBackground: _SwipeBackground(
                       color: c.danger,
                       icon: Icons.delete_outline_rounded,
-                      label: 'Supprimer',
+                      label: AkibaL10n.tr('delete'),
                       alignLeft: false,
                     ),
                     confirmDismiss: (DismissDirection direction) async {
@@ -674,7 +699,9 @@ class _TransactionsCard extends StatelessWidget {
                         line.transaction,
                         c,
                       ),
-                      badge: line.transaction.isNeutral ? 'Tiers' : null,
+                      badge: line.transaction.isNeutral
+                          ? AkibaL10n.tr('third_party_short')
+                          : null,
                       onTap: () => onEdit(line),
                     ),
                   ),
@@ -685,8 +712,7 @@ class _TransactionsCard extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: AkibaSpacing.sm),
             child: Text(
-              'Glissez une ligne pour la modifier (droite) ou la supprimer '
-              '(gauche).',
+              AkibaL10n.tr('swipe_hint'),
               style: AkibaTypography.legend.copyWith(color: c.textMuted),
             ),
           ),
@@ -763,7 +789,7 @@ class _EmptyTransactions extends StatelessWidget {
                 Icon(Icons.receipt_long_rounded, size: 28, color: c.terracotta),
                 const SizedBox(height: AkibaSpacing.md),
                 Text(
-                  'Aucun mouvement pour l’instant',
+                  AkibaL10n.tr('no_movement'),
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 15,
@@ -773,7 +799,7 @@ class _EmptyTransactions extends StatelessWidget {
                 ),
                 const SizedBox(height: AkibaSpacing.xs),
                 Text(
-                  'Touchez le cochon AKIBA pour ajouter votre première ligne.',
+                  AkibaL10n.tr('no_movement_note'),
                   textAlign: TextAlign.center,
                   style: AkibaTypography.legend.copyWith(color: c.textMuted),
                 ),
@@ -865,20 +891,22 @@ class _ErrorState extends StatelessWidget {
             Icon(Icons.lock_outline_rounded, size: 32, color: c.danger),
             const SizedBox(height: AkibaSpacing.md),
             Text(
-              'Base locale illisible',
+              AkibaL10n.tr('db_unreadable'),
               style: AkibaTypography.sectionTitle.copyWith(
                 color: c.textPrimary,
               ),
             ),
             const SizedBox(height: AkibaSpacing.sm),
             Text(
-              'La base chiffrée n’a pas pu être ouverte. Vos données ne sont '
-              'pas modifiées.',
+              AkibaL10n.tr('db_unreadable_note'),
               textAlign: TextAlign.center,
               style: AkibaTypography.body.copyWith(color: c.textMuted),
             ),
             const SizedBox(height: AkibaSpacing.lg),
-            OutlinedButton(onPressed: onRetry, child: const Text('Réessayer')),
+            OutlinedButton(
+              onPressed: onRetry,
+              child: Text(AkibaL10n.tr('retry')),
+            ),
           ],
         ),
       ),

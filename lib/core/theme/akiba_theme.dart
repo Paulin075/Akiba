@@ -106,12 +106,21 @@ abstract final class AkibaTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: c.surfaceElevated,
+        // Le texte saisi hérite du `textTheme` appliqué à la palette ci-dessus;
+        // hint, labels et icônes gardent ici leurs couleurs dédiées.
         hintStyle: AkibaTypography.body.copyWith(
           color: c.textMuted.withValues(alpha: 0.85),
         ),
         labelStyle: AkibaTypography.body.copyWith(color: c.textMuted),
+        floatingLabelStyle: AkibaTypography.body.copyWith(
+          color: c.terracotta,
+          fontWeight: FontWeight.w600,
+        ),
         counterStyle: AkibaTypography.legend.copyWith(color: c.textMuted),
+        helperStyle: AkibaTypography.legend.copyWith(color: c.textMuted),
         errorStyle: AkibaTypography.legend.copyWith(color: c.danger),
+        prefixIconColor: c.textMuted,
+        suffixIconColor: c.textMuted,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: AkibaSpacing.md,
           vertical: AkibaSpacing.md,

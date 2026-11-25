@@ -1,7 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Réseau : uniquement pour les logos de devises (CDN, mis en cache
-         localement) et les sauvegardes serveur maître / Home Lab configurées
-         par la personne. Aucune télémétrie. -->
+    <!-- Réseau : uniquement pour les sauvegardes serveur maître / Home Lab et
+         l'assistant IA configurés par la personne. Les logos de devises sont
+         embarqués dans l'application : aucun accès réseau pour l'interface.
+         Aucune télémétrie. -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
     <!-- Rappels locaux (matin / midi / soir) et reprogrammation au démarrage. -->
@@ -16,10 +17,13 @@
     <!-- Dictée locale (assistant) : le micro n'est activé que sur appui. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 
-    <!-- Lecture des SMS financiers : permission demandée uniquement quand la
-         personne active l'interrupteur de l'onboarding ou du Profil. Aucun SMS
-         n'est lu ni stocké sans cette action explicite. -->
+    <!-- SMS financiers (Flooz, Mixx by Yas, banques) : permissions demandées
+         uniquement quand la personne active l'interrupteur de l'onboarding ou
+         du Profil. RECEIVE_SMS permet la détection application fermée ; le
+         contenu n'est jamais stocké sur disque, seulement porté par l'Intent
+         de la notification, et rien n'est écrit en base sans confirmation. -->
     <uses-permission android:name="android.permission.READ_SMS"/>
+    <uses-permission android:name="android.permission.RECEIVE_SMS"/>
 
     <!-- Home Lab : découverte du serveur sur le Wi-Fi domestique. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
@@ -34,7 +38,8 @@
         android:name="${applicationName}"
         android:allowBackup="false"
         android:fullBackupContent="false"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -57,6 +62,17 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Récepteur SMS : dépose le texte dans l'Intent de la notification,
+             sans écriture en base. Protégé par BROADCAST_SMS pour qu'aucune
+             application tierce ne puisse simuler un SMS financier. -->
+        <receiver
+            android:name=".SmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="999">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED"/>
+            </intent-filter>
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -76,6 +92,13 @@
         <!-- Reconnaissance vocale hors ligne (speech_to_text). -->
         <intent>
             <action android:name="android.speech.RecognitionService"/>
+        </intent>
+        <!-- Connexion Google : ouverture du navigateur externe (url_launcher).
+             Sans cette déclaration, Android 11+ refuse l'intent et la page
+             d'autorisation ne s'ouvre jamais. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
         </intent>
     </queries>
 </manifest>

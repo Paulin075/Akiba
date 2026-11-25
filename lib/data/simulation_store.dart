@@ -300,7 +300,7 @@ class SimulationAkibaStore implements AkibaStore {
     _add(
       monthStart.add(const Duration(days: 5, hours: 12)),
       bank,
-      -35000,
+      35000,
       TransactionKind.income,
       category: 'Vente',
       note: 'Vente de tissus',
@@ -744,6 +744,50 @@ class SimulationAkibaStore implements AkibaStore {
     } else {
       _debts.add(debt);
     }
+  }
+
+  @override
+  Future<TransactionRecord> settleDebt(
+    Debt debt, {
+    required int amount,
+    required String accountId,
+  }) async {
+    final int remaining = debt.remaining;
+    if (remaining <= 0) {
+      throw StateError('Cette créance ou dette est déjà soldée.');
+    }
+    final int settled = amount < remaining ? amount : remaining;
+    if (settled <= 0) {
+      throw StateError('Le montant du règlement doit être supérieur à zéro.');
+    }
+    final bool received = debt.direction == DebtDirection.owedToMe;
+    final DateTime now = DateTime.now();
+    final TransactionRecord movement = TransactionRecord(
+      id: 'sim-debt-${debt.id}-${now.microsecondsSinceEpoch}',
+      accountId: accountId,
+      amount: received ? settled : -settled,
+      kind: received ? TransactionKind.income : TransactionKind.expense,
+      category: received ? 'Créance' : 'Dette',
+      note: received
+          ? 'Créance encaissée · ${debt.counterparty}'
+          : 'Dette remboursée · ${debt.counterparty}',
+      occurredAt: now,
+      createdAt: now,
+    );
+    await saveTransaction(movement);
+    await saveDebt(
+      Debt(
+        id: debt.id,
+        direction: debt.direction,
+        counterparty: debt.counterparty,
+        principal: debt.principal,
+        settledAmount: debt.settledAmount + settled,
+        dueDate: debt.dueDate,
+        note: debt.note,
+        createdAt: debt.createdAt,
+      ),
+    );
+    return movement;
   }
 
   @override

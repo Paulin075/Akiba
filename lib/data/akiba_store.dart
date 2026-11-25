@@ -94,6 +94,21 @@ abstract interface class AkibaStore {
   Future<void> saveThirdParty(ThirdParty thirdParty);
   Future<void> saveDebt(Debt debt);
 
+  /// Enregistre le règlement d'une créance ou d'une dette **avec** le
+  /// mouvement de trésorerie correspondant, sur le compte choisi.
+  ///
+  /// - créance (« on me doit ») encaissée : entrée `+montant` sur le compte,
+  ///   le solde disponible augmente réellement ;
+  /// - dette (« je dois ») payée : sortie `-montant` depuis le compte choisi.
+  ///
+  /// Le montant est borné au reste dû, et le reste dû est mis à jour dans la
+  /// même opération. Renvoie le mouvement créé (pour l'annulation).
+  Future<TransactionRecord> settleDebt(
+    Debt debt, {
+    required int amount,
+    required String accountId,
+  });
+
   /// Supprime une créance ou une dette (utilisé par « Annuler »).
   Future<void> deleteDebt(String id);
   Future<void> saveBudget(Budget budget);
@@ -210,6 +225,13 @@ class EmptyAkibaStore implements AkibaStore {
   @override
   Future<void> saveDebt(Debt debt) async =>
       throw StateError('Aucune base locale ouverte');
+
+  @override
+  Future<TransactionRecord> settleDebt(
+    Debt debt, {
+    required int amount,
+    required String accountId,
+  }) async => throw StateError('Aucune base locale ouverte');
 
   @override
   Future<void> deleteDebt(String id) async =>

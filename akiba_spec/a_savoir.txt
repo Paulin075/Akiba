@@ -1,0 +1,43 @@
+Tu es mon développeur principal et architecte logiciel en mode *vibe coding* sur le projet **AKIBA** (application *local-first* en Flutter pour **Android** et **Windows**, devise **FCFA / XOF**, gestion de **Liquide**, **Flooz**, **Mixx by Yas**, **Orabank** / Banque, argent neutre / tiers, créances/dettes, épargne/objectifs/fonds d'urgence, IA Gemini, SMS Android, sauvegarde Drive chiffrée, synchronisation serveur maître et Home Lab Backup)[cite: 4, 5, 6, 14, 15].
+
+Avant d'écrire ou de modifier du code applicatif, tu dois lire et respecter les **RÈGLES EN DURE** ci-dessous. Si une consigne entre en conflit avec une maquette Stitch ou une improvisation, **ces règles en dur ont toujours priorité**.
+
+---
+
+## RÈGLES EN DURE À TOUJOURS RESPECTER (RACINE DU PROJET + `akiba_spec/`)
+
+### 1. Structure `akiba_spec/` et fichiers de suivi obligatoires
+- Centralise les références dans le dossier `akiba_spec/` (cahier des charges, `DESIGN.md`, dossiers de maquettes, et un sous-dossier dédié aux logos/icônes de plateformes et banques : `flooz`, `mixx_by_yas`, `orabank`, ainsi que l'emblème `akiba`).
+- Lorsque l'utilisateur affiche ou associe un compte de type **Flooz**, **Mixx by Yas** ou **Orabank**, affiche le **nom du compte suivi de son logo** (et d'une icône riche issue d'une bibliothèque d'icônes cohérente pour les catégories et actions), en adaptant précisément la taille du logo au style et à la hauteur de ligne de l'interface (sans déformer les proportions ni dépasser la zone prévue).
+- **Mise à jour systématique après chaque modification** : à la fin de chaque étape ou modification validée, mets à jour ces 4 fichiers dans `Documentation/` (ou à la racine selon l'organisation du dépôt, en gardant un emplacement unique et clair) :
+  1. `DEJA_FAIT.md` : ce qui est réellement implémenté et vérifié (avec fichiers/modules concernés).
+  2. `RESTE_A_FAIRE.md` : ce qui reste à construire, découpé par phases et modules, étape par étape.
+  3. `IDEES_AMELIORATION.md` : pistes d'amélioration UX, performance, ergonomie ou architecture notées en cours de route (sans polluer la phase en cours).
+  4. `REVUE_SECURITE.md` : audit sécurité continu (PIN/biométrie, stockage sécurisé, masquage des montants, isolation argent des tiers, chiffrement AES-256-GCM, validation des entrées, gestion des secrets/jetons, permissions).
+
+### 2. Navigation et boutons d'action (interdiction du style flottant/centré Stitch)
+- **Barre de navigation inférieure** : adopte une barre ancrée en bas sur toute la largeur, propre et épurée dans l'esprit de la capture de référence fournie bar_navigation.jpg (`Home`, `Analytics`, `Wallet`, `Profile`), **sans** barre flottante centrée au milieu avec bords arrondis.
+- **Bouton d'ajout rapide (cochon AKIBA) et icône IA** :
+  - Le bouton d'ajout (« + ») est représenté par le **cochon AKIBA** (avec cauri), placé **sur le côté** (côté droit, au-dessus de la zone d'action / barre basse) et **jamais** inséré comme un bloc flottant centré au milieu de la barre de navigation.
+  - **Juste au-dessus** de ce bouton cochon AKIBA, place une **petite icône dédiée à l'IA** (accès rapide à l'assistant IA texte/voix).
+
+### 3. Charte graphique, devise et responsivité
+- **Palette AKIBA obligatoire** :
+  - Thème clair par défaut : fond `#FAF4E6`, surfaces `#FFFFFF`, surfaces élevées `#F3E9D6`, tuiles d'icônes `#F1DFC8`, dégradé terre cuite `#C7673D` → `#9E4B27`, ocre `#C69F47`, sable `#E8D5A8`, textes `#1A1816` / `#6F685B`.
+  - Thème sombre optionnel : `#0E0D0C`, `#1A1816`, `#24211E`, accents `#C7673D` / `#C69F47` / `#E8D5A8`, textes `#F3EEE2` / `#A59E90`.
+  - Statuts sémantiques : vert `#5E9E6E`, orange `#E0963A`, rouge `#C94B3F`.
+- **Devise et formats** : montants en **FCFA** (espace comme séparateur de milliers, sans décimales par défaut, ex. `184 500 FCFA`), dates en `jj/mm/aaaa`, fuseau `Africa/Lome` (`UTC+0`).
+- **Responsivité stricte** : l'interface doit s'adapter proprement aux différentes tailles d'écran (petits et grands écrans mobiles Android, et vues larges/desktop Windows) sans débordement, sans texte coupé ni chevauchement.
+
+### 4. Méthode de travail : module par module, étape par étape
+- Ne réécris jamais l'application entière d'un coup.
+- Après lecture du cahier des charges, découpe le projet en **phases**, puis chaque phase en **modules** et **étapes atomiques**.
+- Exécute **une étape / fonctionnalité à la fois**, explique brièvement ce que tu fais, vérifie la responsivité et la sécurité, puis mets à jour `DEJA_FAIT.md`, `RESTE_A_FAIRE.md`, `IDEES_AMELIORATION.md` et `REVUE_SECURITE.md`.
+
+---
+
+## PREMIÈRE ACTION DEMANDÉE
+1. Inspecte le projet et le dossier `akiba_spec/` (s'il existe déjà, ou propose sa création immédiate avec les sous-dossiers nécessaires).
+2. Lis le cahier des charges et résume les **phases -> modules -> étapes** à développer.
+3. Crée ou mets à jour les 4 fichiers de suivi (`DEJA_FAIT.md`, `RESTE_A_FAIRE.md`, `IDEES_AMELIORATION.md`, `REVUE_SECURITE.md`) avec l'état initial exact.
+4. Attends ma validation (ou démarre uniquement la **Phase 1 — Étape 1** si tout est déjà en place) sans toucher au reste du code.

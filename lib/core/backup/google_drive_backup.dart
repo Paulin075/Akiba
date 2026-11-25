@@ -4,35 +4,29 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart' as hash;
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config/google_oauth_config.dart';
+import 'google_android_auth.dart';
+import 'google_auth_exception.dart';
+import 'google_token_vault.dart';
 
-/// Erreur lisible de la connexion Google (jamais un jeton).
-class GoogleAuthException implements Exception {
-  const GoogleAuthException(this.message);
+export 'google_auth_exception.dart';
 
-  final String message;
-
-  @override
-  String toString() => message;
-}
-
-/// Jetons OAuth en mémoire ; seul le jeton de rafraîchissement est conservé,
-/// dans le coffre du système.
+/// Jeton d'accès en mémoire ; le jeton de rafraîchissement (ordinateur
+/// uniquement) reste dans le coffre du système.
 class GoogleSession {
   GoogleSession({
     required this.accessToken,
-    required this.refreshToken,
     required this.expiresAt,
     this.email = '',
+    this.accountId = '',
   });
 
   final String accessToken;
-  final String refreshToken;
   final DateTime expiresAt;
   final String email;
+  final String accountId;
 
   bool get expired =>
       DateTime.now().isAfter(expiresAt.subtract(const Duration(minutes: 2)));
@@ -40,23 +34,42 @@ class GoogleSession {
 
 /// Connexion Google et sauvegarde chiffrée dans l'espace applicatif de Drive.
 ///
-/// - Flux **code + PKCE** avec redirection sur la boucle locale, sans secret
-///   embarqué dans l'application.
+/// - **Android** : `google_sign_in` (Play services). La boucle locale est
+///   dépréciée par Google pour les applications mobiles et répond souvent
+///   « 400 invalid_request » ; aucun navigateur ni `client_secret` n'est alors
+///   utilisé.
+/// - **Ordinateur** : flux **code + PKCE** avec redirection sur la boucle
+///   locale, sans secret embarqué dans l'application.
 /// - Aucune lecture du Drive de la personne : uniquement `appDataFolder`, qui
 ///   contient les sauvegardes AKIBA et disparaît avec l'application.
 /// - L'enveloppe déposée est **déjà chiffrée AES-256-GCM** : Google ne voit
 ///   que du chiffré, la phrase secrète ne quitte jamais l'appareil.
 /// - Hors ligne ou sans identifiants, l'application reste pleinement utilisable.
 class GoogleDriveService {
-  GoogleDriveService({this.storage = const FlutterSecureStorage()});
+  GoogleDriveService({
+    GoogleTokenVault? vault,
+    GoogleAndroidAuth? androidAuth,
+    bool? android,
+  }) : _vault = vault ?? const SecureGoogleTokenVault(),
+       _androidAuth = androidAuth ?? GoogleSignInAndroidAuth(),
+       // Injectable : les tests vérifient les deux branches sans appareil.
+       _android = android ?? Platform.isAndroid;
 
-  final FlutterSecureStorage storage;
+  final GoogleTokenVault _vault;
+  final GoogleAndroidAuth _androidAuth;
+  final bool _android;
 
+  /// Jeton durable du flux ordinateur. Son absence signifie « session
+  /// Android » : Play services renouvelle le jeton lui-même, aucun mode de
+  /// connexion n'a donc besoin d'être mémorisé séparément.
   static const String _refreshKey = 'akiba_google_refresh_token';
   static const String _emailKey = 'akiba_google_email';
+  static const String _accountIdKey = 'akiba_google_account_id';
 
-  static const String _authEndpoint =
-      'https://accounts.google.com/o/oauth2/v2/auth';
+  /// `google_sign_in` ne publie pas de date d'expiration : Google accorde une
+  /// heure environ, marge de sécurité déduite.
+  static const Duration _androidTokenLife = Duration(minutes: 50);
+
   static const String _tokenEndpoint = 'https://oauth2.googleapis.com/token';
   static const String _driveEndpoint = 'https://www.googleapis.com/drive/v3';
   static const String _uploadEndpoint =
@@ -67,7 +80,7 @@ class GoogleDriveService {
   /// Adresse du compte lié, ou `null` si aucune connexion n'est enregistrée.
   Future<String?> linkedEmail() async {
     try {
-      final String? email = await storage.read(key: _emailKey);
+      final String? email = await _vault.read(_emailKey);
       return (email == null || email.isEmpty) ? null : email;
     } catch (_) {
       return null;
@@ -76,43 +89,46 @@ class GoogleDriveService {
 
   Future<bool> get isLinked async => (await linkedEmail()) != null;
 
-  /// Ouvre le navigateur, attend le retour de Google et enregistre le jeton de
-  /// rafraîchissement. Lève [GoogleAuthException] si le flux échoue.
+  /// Identifiant Google stable (claim `sub`), uniquement en mémoire dans les
+  /// enveloppes; il sert à dériver la clé et n'est jamais ajouté au backup.
+  Future<String> currentAccountId() async => (await _activeSession()).accountId;
+
+  /// Connecte le compte Google : `google_sign_in` sur Android, navigateur +
+  /// boucle locale ailleurs. Lève [GoogleAuthException] si la connexion échoue.
   Future<GoogleSession> signIn() async {
+    // La configuration arrive normalement de `main` : on ne relit le disque
+    // que si rien n'est encore chargé (écran monté seul, test).
+    if (GoogleOAuthConfig.clientId.isEmpty &&
+        GoogleOAuthConfig.androidServerClientId.isEmpty) {
+      await GoogleOAuthConfig.load();
+    }
+    if (_android) return _signInAndroid();
     if (!GoogleOAuthConfig.isConfigured) {
-      throw const GoogleAuthException(
-        'Ajoutez d’abord votre identifiant OAuth dans '
-        'lib/core/config/google_oauth_config.dart.',
+      throw GoogleAuthException(
+        'Aucun identifiant OAuth exploitable. ${GoogleOAuthConfig.setupHint}',
       );
     }
 
     final String verifier = _randomVerifier();
     final String challenge = _challenge(verifier);
+    final String state = _randomVerifier();
     final HttpServer server = await HttpServer.bind(
       InternetAddress.loopbackIPv4,
       0,
     );
     final String redirect = GoogleOAuthConfig.redirectUri(server.port);
 
-    final Uri authorization = Uri.parse(_authEndpoint).replace(
-      queryParameters: <String, String>{
-        'client_id': GoogleOAuthConfig.clientId,
-        'redirect_uri': redirect,
-        'response_type': 'code',
-        'scope': GoogleOAuthConfig.scopes.join(' '),
-        'code_challenge': challenge,
-        'code_challenge_method': 'S256',
-        'access_type': 'offline',
-        'prompt': 'consent',
-        'include_granted_scopes': 'true',
-      },
+    final Uri authorization = GoogleOAuthConfig.authorizationUri(
+      port: server.port,
+      codeChallenge: challenge,
+      state: state,
     );
 
     final Completer<Uri> callback = Completer<Uri>();
     final StreamSubscription<HttpRequest> subscription = server.listen((
       HttpRequest request,
     ) async {
-      if (request.uri.path != GoogleOAuthConfig.redirectPath) {
+      if (request.uri.path != '/') {
         request.response.statusCode = HttpStatus.notFound;
         await request.response.close();
         return;
@@ -142,13 +158,21 @@ class GoogleDriveService {
       final Uri result = await callback.future.timeout(
         GoogleOAuthConfig.signInTimeout,
         onTimeout: () => throw const GoogleAuthException(
-          'Connexion Google expirée : réessayez depuis le centre de sauvegarde.',
+          'Connexion Google expirée sans retour du navigateur. Si la page '
+          'affichait « 400 invalid_request », utilisez un client OAuth de type '
+          '« Application de bureau » ; sinon réessayez depuis le centre de '
+          'sauvegarde. Le dossier Drive synchronisé reste disponible.',
         ),
       );
 
       final String? error = result.queryParameters['error'];
       if (error != null) {
         throw GoogleAuthException(_explain(error));
+      }
+      if (result.queryParameters['state'] != state) {
+        throw const GoogleAuthException(
+          'Réponse OAuth invalide : recommencez la connexion Google.',
+        );
       }
       final String? code = result.queryParameters['code'];
       if (code == null || code.isEmpty) {
@@ -172,6 +196,18 @@ class GoogleDriveService {
     }
   }
 
+  /// Connexion Android native : Play services rend un jeton Drive, et c'est
+  /// Play services qui le renouvellera silencieusement plus tard.
+  Future<GoogleSession> _signInAndroid() async {
+    if (!GoogleOAuthConfig.isAndroidReady) {
+      throw GoogleAuthException(
+        'Connexion Google Android non configurée. '
+        '${GoogleOAuthConfig.androidHint}',
+      );
+    }
+    return _rememberAndroid(await _androidAuth.connect());
+  }
+
   /// Traduit les refus de Google en actions concrètes, sans jargon inutile.
   ///
   /// « Accès rejeté » vient presque toujours de l'écran de consentement
@@ -193,27 +229,51 @@ class GoogleDriveService {
       case 'invalid_client':
         return 'Identifiant OAuth refusé. Vérifiez que '
             'secrets/google_oauth.json contient bien le client de type '
-            '« Application de bureau » et relancez avec '
-            '--dart-define-from-file.';
+            '« Application de bureau », puis relancez '
+            '« dart run tool/sync_oauth_secrets.dart ». Le dossier Drive '
+            'synchronisé reste utilisable en attendant.';
       case 'admin_policy_enforced':
         return 'Votre organisation Google interdit cette application. '
             'Utilisez un compte personnel ou faites autoriser l’application '
             'par l’administrateur.';
+      case 'invalid_request':
+        // Android ne passe plus par ici (`google_sign_in` le remplace) : cette
+        // réponse ne vient donc que du flux de bureau.
+        return 'Google a refusé la requête (400 invalid_request). Causes '
+            'usuelles : identifiant vide ou copié avec un espace, client OAuth '
+            'de type « Application Web » au lieu de « Application de bureau », '
+            'ou portée drive.appdata non déclarée. Vérifiez '
+            '${GoogleOAuthConfig.devFilePath} : la copie embarquée est '
+            'réécrite à la prochaine build Android. Le dossier Drive '
+            'synchronisé reste utilisable en attendant.';
+      case 'unauthorized_client':
+        return 'Ce client OAuth n’est pas autorisé à utiliser le flux des '
+            'applications installées. Créez un client « Application de bureau » '
+            'et utilisez son identifiant.';
+      case 'invalid_scope':
+        return 'La portée demandée est refusée. Activez l’API Google Drive et '
+            'la portée drive.appdata sur l’écran de consentement.';
+      case 'disallowed_useragent':
+        return 'Google refuse les navigateurs intégrés. Choisissez un '
+            'navigateur externe (Chrome, Firefox, Safari) pour vous connecter.';
       default:
         return 'Google a refusé la connexion ($error). Vérifiez l’écran de '
             'consentement OAuth et la portée drive.appdata.';
     }
   }
 
-  /// Oublie la connexion : le jeton de rafraîchissement est effacé du coffre.
+  /// Oublie la connexion : les jetons sont effacés du coffre et, sur Android,
+  /// l'autorisation accordée à AKIBA est révoquée.
   Future<void> signOut() async {
     _session = null;
     try {
-      await storage.delete(key: _refreshKey);
-      await storage.delete(key: _emailKey);
+      await _vault.delete(_refreshKey);
+      await _vault.delete(_emailKey);
+      await _vault.delete(_accountIdKey);
     } catch (_) {
       // Coffre indisponible : la session en mémoire est déjà oubliée.
     }
+    if (_android) await _androidAuth.disconnect();
   }
 
   /// Dépose l'enveloppe chiffrée et ne garde que les cinq plus récentes.
@@ -349,18 +409,39 @@ class GoogleDriveService {
     String? refreshToken;
     String email = '';
     try {
-      refreshToken = await storage.read(key: _refreshKey);
-      email = await storage.read(key: _emailKey) ?? '';
+      refreshToken = await _vault.read(_refreshKey);
+      email = await _vault.read(_emailKey) ?? '';
     } catch (_) {
       throw const GoogleAuthException(
         'Le coffre du système est indisponible : reconnectez-vous à Google.',
       );
     }
+
+    // Pas de jeton durable : session Android, renouvelée silencieusement par
+    // Play services (aucun navigateur, rien à écrire sur disque).
     if (refreshToken == null || refreshToken.isEmpty) {
-      throw const GoogleAuthException(
-        'Connectez d’abord votre compte Google dans le centre de sauvegarde.',
+      if (!_android) {
+        throw const GoogleAuthException(
+          'Connectez d’abord votre compte Google dans le centre de sauvegarde.',
+        );
+      }
+      final GoogleAndroidToken? token = await _androidAuth.restore();
+      if (token == null) {
+        throw const GoogleAuthException(
+          'Session Google expirée : reconnectez-vous depuis le centre de '
+          'sauvegarde. Le dossier Drive synchronisé reste utilisable.',
+        );
+      }
+      final GoogleSession session = GoogleSession(
+        accessToken: token.accessToken,
+        expiresAt: DateTime.now().add(_androidTokenLife),
+        email: token.email.isEmpty ? email : token.email,
+        accountId: token.accountId,
       );
+      _session = session;
+      return session;
     }
+
     try {
       final Map<String, dynamic> tokens =
           await _postForm(_tokenEndpoint, <String, String>{
@@ -372,15 +453,44 @@ class GoogleDriveService {
           });
       return GoogleSession(
         accessToken: '${tokens['access_token']}',
-        refreshToken: refreshToken,
         expiresAt: _expiry(tokens),
         email: email,
+        accountId: await _vault.read(_accountIdKey) ?? '',
       );
     } on GoogleAuthException {
       // Jeton révoqué : on oublie la connexion pour ne pas boucler.
       await signOut();
       rethrow;
     }
+  }
+
+  /// Session Android : ni navigateur, ni jeton de rafraîchissement à écrire.
+  Future<GoogleSession> _rememberAndroid(GoogleAndroidToken token) async {
+    if (token.accessToken.isEmpty) {
+      throw const GoogleAuthException(
+        'Google n’a pas renvoyé de jeton Drive : réessayez la connexion.',
+      );
+    }
+    try {
+      if (token.email.isNotEmpty) {
+        await _vault.write(_emailKey, token.email);
+      }
+      if (token.accountId.isNotEmpty) {
+        await _vault.write(_accountIdKey, token.accountId);
+      }
+    } catch (_) {
+      throw const GoogleAuthException(
+        'La session Google n’a pas pu être protégée sur cet appareil.',
+      );
+    }
+    final GoogleSession session = GoogleSession(
+      accessToken: token.accessToken,
+      expiresAt: DateTime.now().add(_androidTokenLife),
+      email: token.email,
+      accountId: token.accountId,
+    );
+    _session = session;
+    return session;
   }
 
   Future<GoogleSession> _remember(Map<String, dynamic> tokens) async {
@@ -392,21 +502,23 @@ class GoogleDriveService {
       );
     }
     final String email = _emailFrom(tokens['id_token']);
+    final String accountId = _accountIdFrom(tokens['id_token']);
     if (email.isNotEmpty) {
       try {
-        await storage.write(key: _emailKey, value: email);
+        await _vault.write(_emailKey, email);
+        if (accountId.isNotEmpty) await _vault.write(_accountIdKey, accountId);
       } catch (_) {
         // L'adresse n'est qu'un libellé : son absence ne bloque pas la synchro.
       }
     }
     final GoogleSession session = GoogleSession(
       accessToken: access,
-      refreshToken: refresh,
       expiresAt: _expiry(tokens),
       email: email,
+      accountId: accountId,
     );
     try {
-      await storage.write(key: _refreshKey, value: refresh);
+      await _vault.write(_refreshKey, refresh);
     } catch (_) {
       throw const GoogleAuthException(
         'Le jeton Google n’a pas pu être protégé sur cet appareil.',
@@ -436,6 +548,25 @@ class GoogleDriveService {
       }
     } catch (_) {
       // Un id_token illisible n'empêche pas la sauvegarde.
+    }
+    return '';
+  }
+
+  static String _accountIdFrom(Object? idToken) {
+    if (idToken is! String) return '';
+    final List<String> parts = idToken.split('.');
+    if (parts.length < 2) return '';
+    try {
+      final String padded = parts[1].padRight(
+        (parts[1].length + 3) ~/ 4 * 4,
+        '=',
+      );
+      final Object? decoded = jsonDecode(utf8.decode(base64Url.decode(padded)));
+      if (decoded is Map && decoded['sub'] is String) {
+        return decoded['sub'] as String;
+      }
+    } catch (_) {
+      // Un jeton illisible ne révèle jamais sa charge utile aux journaux.
     }
     return '';
   }

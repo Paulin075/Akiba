@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/format/akiba_money.dart';
+import '../../core/sms/sms_entry_intent.dart';
 import '../../core/state/akiba_data_revision.dart';
 import '../../core/theme/akiba_colors.dart';
 import '../../core/theme/akiba_tokens.dart';
@@ -54,12 +55,14 @@ Future<void> openQuickEntry(
   QuickEntryMode mode = QuickEntryMode.expense,
   TransactionLine? editing,
   VoidCallback? onSaved,
+  SmsEntryIntent? prefill,
 }) async {
   final QuickEntryOutcome? outcome = await _showQuickEntry(
     context,
     store: store,
     mode: mode,
     editing: editing,
+    prefill: prefill,
   );
   if (outcome == null || !context.mounted) return;
 
@@ -108,12 +111,14 @@ Future<QuickEntryOutcome?> _showQuickEntry(
   required AkibaStore store,
   required QuickEntryMode mode,
   TransactionLine? editing,
+  SmsEntryIntent? prefill,
 }) {
   final bool wide = MediaQuery.sizeOf(context).width >= 720;
   final Widget body = _QuickEntryBody(
     store: store,
     initialMode: mode,
     editing: editing,
+    prefill: prefill,
   );
 
   if (wide) {
@@ -157,11 +162,16 @@ class _QuickEntryBody extends StatefulWidget {
     required this.store,
     required this.initialMode,
     this.editing,
+    this.prefill,
   });
 
   final AkibaStore store;
   final QuickEntryMode initialMode;
   final TransactionLine? editing;
+
+  /// Données détectées dans un SMS : la fiche s'ouvre préremplie et reste à
+  /// confirmer. Rien n'est écrit avant le bouton d'enregistrement.
+  final SmsEntryIntent? prefill;
 
   @override
   State<_QuickEntryBody> createState() => _QuickEntryBodyState();
@@ -211,6 +221,16 @@ class _QuickEntryBodyState extends State<_QuickEntryBody> {
   @override
   void initState() {
     super.initState();
+    final SmsEntryIntent? prefill = widget.prefill;
+    if (widget.editing == null && prefill != null) {
+      _amount.text = '${prefill.amount}';
+      _note.text = prefill.note;
+      _mode = prefill.isNeutral
+          ? QuickEntryMode.thirdParty
+          : (prefill.income ? QuickEntryMode.income : QuickEntryMode.expense);
+      _partyName.text = prefill.counterparty ?? '';
+      _category = null;
+    }
     final TransactionLine? editing = widget.editing;
     if (editing != null) {
       final TransactionRecord record = editing.transaction;
@@ -249,7 +269,20 @@ class _QuickEntryBodyState extends State<_QuickEntryBody> {
       _accounts = accounts;
       _budgets = budgets;
       _parties = parties;
-      _accountId ??= accounts.isEmpty ? null : accounts.first.account.id;
+      // Le compte du SMS (Flooz, Mixx by Yas, Orabank) est présélectionné
+      // quand le support existe ; sinon on garde le premier compte.
+      String? preferred = _accountId;
+      final String? brand = widget.prefill?.brandName;
+      if (brand != null) {
+        for (final AccountBalance item in accounts) {
+          if (item.account.brand.name == brand) {
+            preferred = item.account.id;
+            break;
+          }
+        }
+      }
+      _accountId =
+          preferred ?? (accounts.isEmpty ? null : accounts.first.account.id);
       _targetId ??= _defaultTarget(accounts, _accountId);
       _loading = false;
     });
@@ -488,11 +521,15 @@ class _QuickEntryBodyState extends State<_QuickEntryBody> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        _editing
+                        widget.prefill != null && !_editing
+                            ? 'Prérempli depuis un SMS · vérifiez puis confirmez.'
+                            : _editing
                             ? 'Les montants restent en FCFA entiers.'
                             : 'Moins de 10 secondes, 3 touches.',
                         style: AkibaTypography.legend.copyWith(
-                          color: c.textMuted,
+                          color: widget.prefill != null && !_editing
+                              ? c.terracottaDeep
+                              : c.textMuted,
                         ),
                       ),
                     ],

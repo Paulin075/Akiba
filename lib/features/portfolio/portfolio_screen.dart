@@ -5,7 +5,10 @@ import '../../core/format/akiba_date.dart';
 import '../../core/format/akiba_money.dart';
 import '../../core/format/label_icons.dart';
 import '../../core/format/transaction_display.dart';
+import '../../core/savings/savings_messages.dart';
+import '../../core/savings/savings_projection.dart';
 import '../../core/state/akiba_data_revision.dart';
+import '../../core/state/akiba_settings.dart';
 import '../../core/state/masked_amounts.dart';
 import '../../core/theme/akiba_colors.dart';
 import '../../core/theme/akiba_tokens.dart';
@@ -24,6 +27,7 @@ import '../../data/models/savings_pot.dart';
 import '../../data/models/third_party.dart';
 import '../../data/models/transaction_record.dart';
 import '../quick_entry/quick_entry.dart';
+import 'movement_detail_sheet.dart';
 
 const List<String> _monthNames = <String>[
   'janvier',
@@ -62,10 +66,29 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   DateTime? _day;
   late Future<_PortfolioData> _future = _load();
 
+  /// Catalogue de messages d'épargne, mémorisé pour éviter la répétition
+  /// immédiate et recréé si la langue change.
+  SavingsMessages? _savingsMessages;
+  String? _savingsLanguage;
+
+  SavingsMessages _messagesFor(AkibaSettings settings) {
+    if (_savingsMessages == null || _savingsLanguage != settings.language) {
+      _savingsMessages = SavingsMessages(language: settings.language);
+      _savingsLanguage = settings.language;
+    }
+    return _savingsMessages!;
+  }
+
   @override
   void initState() {
     super.initState();
     widget.revision.addListener(_reload);
+  }
+
+  @override
+  void didUpdateWidget(covariant PortfolioScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.store, widget.store)) _reload();
   }
 
   @override
@@ -76,12 +99,22 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
 
   void _reload() {
     if (!mounted) return;
-    setState(() => _future = _load());
+    // Future créé hors de `setState` : un callback qui rend un Future est
+    // rejeté par Flutter (« returned a Future ») et le portefeuille restait
+    // figé après une écriture.
+    final Future<_PortfolioData> next = _load();
+    setState(() {
+      _future = next;
+    });
   }
 
   Future<void> _refresh() async {
     final Future<_PortfolioData> next = _load();
-    setState(() => _future = next);
+    if (mounted) {
+      setState(() {
+        _future = next;
+      });
+    }
     await next;
   }
 
@@ -402,7 +435,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                         c,
                       ),
                       badge: line.transaction.isNeutral ? 'Tiers' : null,
-                      onTap: () => _editMovement(line),
+                      onTap: () => _openMovement(line, masked: masked),
                     ),
                 ],
               ),
@@ -415,10 +448,13 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   // ----------------------------------------------------------------- Épargne
 
   Widget _savingsTab(_PortfolioData data, bool masked) {
+    final AkibaColors c = AkibaColors.of(context);
+    final AkibaSettings settings = AkibaSettingsScope.of(context);
     final int total = data.pots.fold<int>(
       0,
       (int sum, SavingsPotBalance pot) => sum + pot.held,
     );
+    final int goalPercent = settings.savingsGoalPercent;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -430,6 +466,39 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
           caption:
               'Un versement sort du compte mais reste à vous : le solde '
               'disponible ne change pas.',
+        ),
+        const SizedBox(height: AkibaSpacing.xl),
+        AkibaSurfaceCard(
+          padding: const EdgeInsets.all(AkibaSpacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                'PROPOSITION DE VERSEMENT',
+                style: AkibaTypography.label.copyWith(
+                  color: c.textMuted,
+                  letterSpacing: 1.3,
+                ),
+              ),
+              const SizedBox(height: AkibaSpacing.sm),
+              Text(
+                'Au moment de verser, AKIBA propose cette part du solde du '
+                'compte choisi. Aucun versement n’est automatique : vous '
+                'relisez le montant.',
+                style: AkibaTypography.legend.copyWith(
+                  color: c.textMuted,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: AkibaSpacing.md),
+              SegmentedControl(
+                segments: const <String>['0 %', '10 %', '20 %', '30 %'],
+                selectedIndex: (goalPercent ~/ 10).clamp(0, 3),
+                onChanged: (int index) =>
+                    settings.set('savings_goal_percent', '${index * 10}'),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: AkibaSpacing.xl),
         const _SectionTitle('Coffres et objectifs'),
@@ -584,8 +653,9 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
         ),
         const SizedBox(height: AkibaSpacing.md),
         Text(
-          'Les créances et dettes ne modifient pas le solde disponible : elles '
-          'sont suivies séparément.',
+          'Tant qu’elles ne sont pas réglées, les créances et dettes restent '
+          'hors du solde disponible. Au règlement, l’encaissement entre sur le '
+          'compte choisi, et le paiement en sort.',
           style: AkibaTypography.legend.copyWith(color: c.textMuted),
         ),
       ],
@@ -676,6 +746,23 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
 
   // ----------------------------------------------------------- Interactions
 
+  /// Fiche de détail : reclassement sur place, puis éventuellement la saisie
+  /// complète si la personne choisit « Modifier ».
+  Future<void> _openMovement(
+    TransactionLine line, {
+    required bool masked,
+  }) async {
+    final MovementDetailAction? action = await showMovementDetail(
+      context,
+      line: line,
+      store: widget.store,
+      revision: widget.revision,
+      masked: masked,
+    );
+    if (!mounted || action == null) return;
+    if (action == MovementDetailAction.edit) await _editMovement(line);
+  }
+
   Future<void> _editMovement(TransactionLine line) async {
     final QuickEntryMode? mode = quickEntryModeFor(line.transaction);
     if (mode == null) {
@@ -738,6 +825,8 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     required bool deposit,
   }) async {
     final bool masked = MaskedAmounts.of(context);
+    final AkibaSettings settings = AkibaSettingsScope.of(context);
+    final int suggestPercent = settings.savingsGoalPercent;
     final List<AccountBalance> accounts = await widget.store.accountBalances();
     if (!mounted) return;
     if (accounts.isEmpty) {
@@ -755,8 +844,11 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
       accounts: accounts,
       maxAmount: deposit ? null : pot.held,
       initialAmount: deposit ? null : pot.held,
+      suggestPercent: deposit ? suggestPercent : null,
       helper: deposit
-          ? 'Le montant sort du compte et reste à vous dans le coffre.'
+          ? 'Le montant sort du compte et reste à vous dans le coffre. La '
+                'proposition suit la part choisie dans l’onglet Épargne '
+                '(0 à 30 %).'
           : 'Le retrait revient sur le compte choisi.',
       confirmLabel: deposit ? 'Verser' : 'Retirer',
     );
@@ -782,14 +874,43 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                 .clamp(0, 999)
                 .round()
           : 0;
+      final SavingsMessages messages = _messagesFor(settings);
+      final String local = messages.next(
+        SavingsMessageKind.encouragement,
+        potName: pot.pot.name,
+      );
+      // Enrichissement optionnel : si l'IA est configurée et joignable, sa
+      // phrase remplace le message local ; sinon le local reste affiché.
+      final Future<String?>? ai = settings.aiRemoteEnabled
+          ? SavingsCoach()
+                .enrich(
+                  settings: settings,
+                  kind: SavingsMessageKind.encouragement,
+                  localMessage: local,
+                  potName: pot.pot.name,
+                )
+                .then((SavingsCoachResult r) => r.fromAi ? r.message : null)
+          : null;
       await showSavingsCelebration(
         context,
         potName: pot.pot.name,
         progressPercent: masked ? 0 : percent,
+        cauriCount: SavingsProjection.cauriCountForAmount(result.amount),
+        message: local,
+        aiMessage: ai,
       );
       return;
     }
-    _toast(deposit ? 'Versement enregistré.' : 'Retrait enregistré.');
+    if (!deposit) {
+      // Taquinerie locale immédiate, sans montant (donc compatible avec le
+      // masquage) et sans bloquer l'écriture déjà enregistrée.
+      final String taunt = _messagesFor(
+        settings,
+      ).next(SavingsMessageKind.withdrawal, potName: pot.pot.name);
+      _toast(taunt);
+      return;
+    }
+    _toast('Versement enregistré.');
   }
 
   Future<void> _reverse(ThirdPartyBalance party) async {
@@ -834,33 +955,51 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   }
 
   Future<void> _settleDebt(Debt debt, {required bool masked}) async {
+    final List<AccountBalance> accounts = await widget.store.accountBalances();
+    if (!mounted) return;
+    if (accounts.isEmpty) {
+      _toast('Ajoutez d’abord un compte dans l’onglet Comptes.');
+      return;
+    }
+    final bool received = debt.direction == DebtDirection.owedToMe;
     final ({int amount, String accountId})? result = await _askAmount(
       context,
       title: 'Régler ${debt.counterparty}',
+      accounts: accounts,
       maxAmount: debt.remaining,
       initialAmount: debt.remaining,
-      helper:
-          'Reste dû : ${AkibaMoney.format(debt.remaining, masked: masked)}.',
-      confirmLabel: 'Régler',
+      helper: received
+          ? 'Reste dû : ${AkibaMoney.format(debt.remaining, masked: masked)}. '
+                'L’encaissement entre sur le compte choisi et augmente le '
+                'solde disponible.'
+          : 'Reste dû : ${AkibaMoney.format(debt.remaining, masked: masked)}. '
+                'Le paiement sort du compte choisi.',
+      confirmLabel: received ? 'Encaisser' : 'Payer',
     );
     if (result == null || !mounted) return;
 
-    await widget.store.saveDebt(
-      Debt(
-        id: debt.id,
-        direction: debt.direction,
-        counterparty: debt.counterparty,
-        principal: debt.principal,
-        settledAmount: debt.settledAmount + result.amount,
-        dueDate: debt.dueDate,
-        note: debt.note,
-        createdAt: debt.createdAt,
-      ),
-    );
-    widget.revision.bump();
-    _toastUndo('Règlement enregistré.', () async {
-      await widget.store.saveDebt(debt);
-    });
+    try {
+      final TransactionRecord movement = await widget.store.settleDebt(
+        debt,
+        amount: result.amount,
+        accountId: result.accountId,
+      );
+      widget.revision.bump();
+      _toastUndo(
+        received
+            ? 'Créance encaissée : le solde disponible a été augmenté.'
+            : 'Dette payée : le montant a été retiré du compte choisi.',
+        () async {
+          // Annulation complète : le mouvement de trésorerie disparaît et le
+          // reste dû revient à son état précédent.
+          await widget.store.deleteTransaction(movement);
+          await widget.store.saveDebt(debt);
+          widget.revision.bump();
+        },
+      );
+    } catch (_) {
+      _toast('Règlement impossible : vérifiez le montant et le compte.');
+    }
   }
 
   Future<void> _addDebt() async {
@@ -1165,6 +1304,15 @@ class _SavingsCard extends StatelessWidget {
     final AkibaColors c = AkibaColors.of(context);
     final Color gauge = pot.isReached ? c.success : c.terracotta;
     final bool hasTarget = pot.pot.targetAmount > 0;
+    // Date d'atteinte dynamique : rythme observé depuis la création du coffre.
+    final DateTime? eta = hasTarget
+        ? SavingsProjection.estimateTargetDate(
+            held: pot.held,
+            target: pot.pot.targetAmount,
+            createdAt: pot.pot.createdAt,
+            now: DateTime.now(),
+          )
+        : null;
 
     return AkibaSurfaceCard(
       child: Column(
@@ -1202,19 +1350,27 @@ class _SavingsCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AkibaSpacing.md),
+          // Montants longs (« 1 250 000 FCFA sur 3 000 000 FCFA ») : le texte
+          // réduit son corps au lieu de déborder sur petit écran.
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: <Widget>[
               Expanded(
-                child: Text(
-                  hasTarget
-                      ? '${AkibaMoney.format(pot.held, masked: masked)} '
-                            'sur ${AkibaMoney.format(pot.pot.targetAmount, masked: masked)}'
-                      : AkibaMoney.format(pot.held, masked: masked),
-                  style: AkibaTypography.money(17, color: c.textPrimary),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    hasTarget
+                        ? '${AkibaMoney.format(pot.held, masked: masked)} '
+                              'sur ${AkibaMoney.format(pot.pot.targetAmount, masked: masked)}'
+                        : AkibaMoney.format(pot.held, masked: masked),
+                    maxLines: 1,
+                    style: AkibaTypography.money(17, color: c.textPrimary),
+                  ),
                 ),
               ),
-              if (hasTarget)
+              if (hasTarget) ...<Widget>[
+                const SizedBox(width: AkibaSpacing.sm),
                 Text(
                   masked ? '••• %' : AkibaMoney.percent(pot.ratio * 100),
                   style: AkibaTypography.money(
@@ -1223,6 +1379,7 @@ class _SavingsCard extends StatelessWidget {
                     color: gauge,
                   ),
                 ),
+              ],
             ],
           ),
           const SizedBox(height: AkibaSpacing.sm),
@@ -1232,7 +1389,12 @@ class _SavingsCard extends StatelessWidget {
             track: c.surfaceElevated,
           ),
           const SizedBox(height: AkibaSpacing.sm),
-          Row(
+          // `Wrap` évite le RenderFlex overflow : les boutons passent à la
+          // ligne suivante au lieu de déborder sur 320-360 px.
+          Wrap(
+            spacing: AkibaSpacing.sm,
+            runSpacing: AkibaSpacing.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: <Widget>[
               TextButton.icon(
                 onPressed: onDeposit,
@@ -1246,13 +1408,30 @@ class _SavingsCard extends StatelessWidget {
                 icon: const Icon(Icons.remove_rounded, size: 18),
                 label: const Text('Retirer'),
               ),
-              const Spacer(),
               if (pot.pot.targetDate != null)
-                Text(
-                  'Jusqu’au ${AkibaDate.short(pot.pot.targetDate!)}',
-                  style: AkibaTypography.legend.copyWith(
-                    color: c.textMuted,
-                    fontSize: 11,
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AkibaSpacing.xs,
+                  ),
+                  child: Text(
+                    'Jusqu’au ${AkibaDate.short(pot.pot.targetDate!)}',
+                    style: AkibaTypography.legend.copyWith(
+                      color: c.textMuted,
+                      fontSize: 11,
+                    ),
+                  ),
+                )
+              else if (eta != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AkibaSpacing.xs,
+                  ),
+                  child: Text(
+                    'À ce rythme : ${AkibaDate.short(eta)}',
+                    style: AkibaTypography.legend.copyWith(
+                      color: c.textMuted,
+                      fontSize: 11,
+                    ),
                   ),
                 ),
             ],
@@ -1262,8 +1441,10 @@ class _SavingsCard extends StatelessWidget {
     );
   }
 
+  /// Libellés courts : la pastille ne doit jamais pousser le nom du coffre
+  /// hors de la carte sur un écran de 320 px.
   static String _kindLabel(SavingsKind kind) => switch (kind) {
-    SavingsKind.emergency => 'Fonds d’urgence',
+    SavingsKind.emergency => 'Urgence',
     SavingsKind.goal => 'Objectif',
     SavingsKind.free => 'Libre',
   };
@@ -1961,9 +2142,10 @@ class _DebtDialogState extends State<_DebtDialog> {
             Text(
               _direction == DebtDirection.owedToMe
                   ? 'On vous doit : cette somme n’entre pas dans votre solde '
-                        'disponible tant qu’elle n’est pas encaissée.'
-                  : 'Vous devez : cette somme ne retire rien de votre solde '
-                        'disponible ; elle reste suivie séparément.',
+                        'disponible avant l’encaissement. À l’encaissement, '
+                        'elle est ajoutée au compte choisi.'
+                  : 'Vous devez : cette somme reste suivie à part. Au '
+                        'paiement, elle est retirée du compte choisi.',
               style: AkibaTypography.legend.copyWith(color: c.textMuted),
             ),
             const SizedBox(height: AkibaSpacing.md),
@@ -2098,6 +2280,7 @@ class _AmountDialog extends StatefulWidget {
     this.maxAmount,
     this.initialAmount,
     this.helper,
+    this.suggestPercent,
   });
 
   final String title;
@@ -2106,6 +2289,9 @@ class _AmountDialog extends StatefulWidget {
   final int? maxAmount;
   final int? initialAmount;
   final String? helper;
+
+  /// Part (0 à 30 %) proposée pour un versement d'épargne.
+  final int? suggestPercent;
 
   @override
   State<_AmountDialog> createState() => _AmountDialogState();
@@ -2121,6 +2307,24 @@ class _AmountDialogState extends State<_AmountDialog> {
   String? _error;
 
   int get _value => int.tryParse(_amount.text) ?? 0;
+
+  AccountBalance? get _selected {
+    for (final AccountBalance item in widget.accounts) {
+      if (item.account.id == _accountId) return item;
+    }
+    return null;
+  }
+
+  /// Proposition recalculée sur le compte sélectionné.
+  int get _suggested {
+    final int percent = widget.suggestPercent ?? 0;
+    final AccountBalance? account = _selected;
+    if (account == null) return 0;
+    return SavingsProjection.suggestedDeposit(
+      accountBalance: account.balance,
+      percent: percent,
+    );
+  }
 
   @override
   void dispose() {
@@ -2173,6 +2377,23 @@ class _AmountDialogState extends State<_AmountDialog> {
               Text(
                 widget.helper!,
                 style: AkibaTypography.legend.copyWith(color: c.textMuted),
+              ),
+            ],
+            if (_suggested > 0) ...<Widget>[
+              const SizedBox(height: AkibaSpacing.xs),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => setState(() {
+                    _amount.text = '$_suggested';
+                    _error = null;
+                  }),
+                  icon: const Icon(Icons.savings_rounded, size: 18),
+                  label: Text(
+                    'Proposer ${widget.suggestPercent} % · '
+                    '${AkibaMoney.format(_suggested)}',
+                  ),
+                ),
               ),
             ],
             if (max != null) ...<Widget>[
@@ -2256,6 +2477,7 @@ Future<({int amount, String accountId})?> _askAmount(
   int? maxAmount,
   int? initialAmount,
   String? helper,
+  int? suggestPercent,
 }) {
   return showDialog<({int amount, String accountId})>(
     context: context,
@@ -2266,6 +2488,7 @@ Future<({int amount, String accountId})?> _askAmount(
       maxAmount: maxAmount,
       initialAmount: initialAmount,
       helper: helper,
+      suggestPercent: suggestPercent,
     ),
   );
 }

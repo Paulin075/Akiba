@@ -52,6 +52,29 @@ class ReminderPlan {
   final bool festive;
 }
 
+/// Échéance de créance ou de dette, réduite à ce dont le rappel a besoin.
+///
+/// Ni le nom du contact ni le montant ne sont nécessaires : le message reste
+/// donc neutre, et le masquage comme la confidentialité sont respectés par
+/// construction.
+class DebtDue {
+  const DebtDue({
+    required this.id,
+    required this.dueDate,
+    required this.owedToMe,
+    this.remaining = 1,
+  });
+
+  final String id;
+  final DateTime dueDate;
+
+  /// Vrai pour « on me doit » (créance), faux pour « je dois » (dette).
+  final bool owedToMe;
+
+  /// Reste dû ; une échéance soldée n'est pas rappelée.
+  final int remaining;
+}
+
 abstract final class ReminderPlanner {
   static const List<String> morningMessages = <String>[
     'Tu as dépensé pour ton petit déjeuner ou ton transport ce matin ? '
@@ -163,6 +186,59 @@ abstract final class ReminderPlanner {
     }
 
     plans.removeWhere((ReminderPlan plan) => !plan.when.isAfter(now));
+    plans.sort((ReminderPlan a, ReminderPlan b) => a.when.compareTo(b.when));
+    return plans;
+  }
+
+  /// Heure des rappels d'échéance de créances et de dettes.
+  static const String debtReminderTime = '09:00';
+
+  /// Un message neutre par sens : aucun montant, aucun nom de contact.
+  static const List<String> debtMessages = <String>[
+    'Une échéance de créance tombe aujourd’hui. Ouvre le Portefeuille pour '
+        'vérifier.',
+    'Une échéance de dette tombe aujourd’hui. Ouvre le Portefeuille pour la '
+        'suivre.',
+  ];
+
+  /// Un rappel par créance ou dette non soldée, à 9 h le jour de l'échéance.
+  ///
+  /// Les échéances déjà passées, soldées ou au-delà de [horizonDays] sont
+  /// ignorées. L'ordre est chronologique.
+  static List<ReminderPlan> planDebts(
+    Iterable<DebtDue> debts, {
+    required DateTime now,
+    int horizonDays = 30,
+    String time = debtReminderTime,
+  }) {
+    final ({int hour, int minute}) parsed = parseTime(time);
+    final DateTime limit = now.add(Duration(days: horizonDays));
+    final List<ReminderPlan> plans = <ReminderPlan>[];
+
+    for (final DebtDue debt in debts) {
+      if (debt.remaining <= 0) continue;
+      final DateTime due = debt.dueDate.toLocal();
+      final DateTime when = DateTime(
+        due.year,
+        due.month,
+        due.day,
+        parsed.hour,
+        parsed.minute,
+      );
+      if (!when.isAfter(now) || when.isAfter(limit)) continue;
+      plans.add(
+        ReminderPlan(
+          slot: 'echeance',
+          title: debt.owedToMe
+              ? 'AKIBA · Créance à échéance'
+              : 'AKIBA · Dette à échéance',
+          body: sanitize(debtMessages[debt.owedToMe ? 0 : 1], masked: true),
+          when: when,
+          festive: false,
+        ),
+      );
+    }
+
     plans.sort((ReminderPlan a, ReminderPlan b) => a.when.compareTo(b.when));
     return plans;
   }

@@ -57,6 +57,11 @@ abstract final class AkibaDurations {
   static const Duration page = Duration(milliseconds: 250);
   static const Duration sheet = Duration(milliseconds: 300);
   static const Duration cauri = Duration(milliseconds: 400);
-  static const Duration splash = Duration(milliseconds: 1100);
+
+  /// Ouverture : l'animation seule, 1 s au total avant l'accès à l'app.
+  static const Duration splash = Duration(seconds: 1);
+
+  /// Versement d'épargne : le geste complet cochon + cauri, 3 secondes.
+  static const Duration cauriDrop = Duration(seconds: 3);
   static const Duration float = Duration(seconds: 3);
 }

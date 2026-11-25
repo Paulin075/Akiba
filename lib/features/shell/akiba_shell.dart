@@ -1,6 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../core/report/report_scheduler.dart';
+import '../../core/sms/sms_bridge.dart';
+import '../../core/sms/sms_entry_intent.dart';
+import '../../core/sms/sms_parser.dart';
 import '../../core/state/akiba_data_revision.dart';
+import '../../core/state/akiba_l10n.dart';
 import '../../core/state/akiba_settings.dart';
 import '../../core/state/masked_amounts.dart';
 import '../../core/theme/akiba_colors.dart';
@@ -45,11 +52,63 @@ class _AkibaShellState extends State<AkibaShell> {
   final ValueNotifier<bool> _masked = ValueNotifier<bool>(false);
   final AkibaDataRevision _revision = AkibaDataRevision();
 
+  StreamSubscription<String>? _smsSubscription;
+  bool _openingSms = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // SMS détecté quand l'application était fermée : le texte attend dans
+    // l'Intent de la notification, on le relit après la première image.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _consumePendingSms();
+      // Rapport de fin de mois : premier lancement du mois suivant, en local.
+      ReportScheduler.maybeGenerate(
+        store: widget.store,
+        settings: widget.settings,
+      );
+    });
+    // SMS reçu pendant que l'application tourne (récepteur natif → canal).
+    _smsSubscription = SmsBridge.messages.listen(_onSms);
+  }
+
   @override
   void dispose() {
+    _smsSubscription?.cancel();
     _masked.dispose();
     _revision.dispose();
     super.dispose();
+  }
+
+  Future<void> _consumePendingSms() async {
+    final String? body = await SmsBridge.consumePending();
+    if (body == null || !mounted) return;
+    await _onSms(body);
+  }
+
+  /// Ouvre la saisie préremplie depuis un SMS. Aucune écriture ici : la
+  /// personne doit encore confirmer dans la fiche.
+  Future<void> _onSms(String body) async {
+    if (!mounted || _openingSms) return;
+    if (!SmsDetector.isFinancialSms(body)) return;
+    final SmsDraft? draft = SmsParser.parseOne(body);
+    if (draft == null) return;
+    final SmsEntryIntent? intent = SmsEntryIntent.fromDraft(draft);
+    if (intent == null) return;
+    _openingSms = true;
+    try {
+      await openQuickEntry(
+        context,
+        store: widget.store,
+        revision: _revision,
+        mode: intent.isNeutral
+            ? QuickEntryMode.thirdParty
+            : (intent.income ? QuickEntryMode.income : QuickEntryMode.expense),
+        prefill: intent,
+      );
+    } finally {
+      _openingSms = false;
+    }
   }
 
   Future<void> _openEntry({QuickEntryMode mode = QuickEntryMode.expense}) {
@@ -157,7 +216,7 @@ class _SimulationBanner extends StatelessWidget {
           const SizedBox(width: AkibaSpacing.sm),
           Expanded(
             child: Text(
-              'Mode simulation · données d’essai locales',
+              AkibaL10n.tr('sim_banner'),
               style: AkibaTypography.label.copyWith(
                 color: c.textPrimary,
                 fontSize: 11,

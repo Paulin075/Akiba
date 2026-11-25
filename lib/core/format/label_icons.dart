@@ -130,6 +130,77 @@ abstract final class LabelIcons {
     Icons.celebration_rounded: <String>['fete', 'fête', 'anniversaire'],
   };
 
+  /// Icône d'une **catégorie** de budget ou de dépense.
+  ///
+  /// Une catégorie a une icône unique et lisible, la même dans Analyses, le
+  /// budget et les ventilations : alimentation, transport, logement, santé,
+  /// école, loisirs, épargne, factures, autre…
+  static IconData forCategory(
+    String? category, {
+    IconData fallback = Icons.category_outlined,
+  }) {
+    if (category == null || category.trim().isEmpty) return fallback;
+    final String key = _normalise(category);
+    final IconData? exact = _categories[key];
+    if (exact != null) return exact;
+    // Repli sur les mots-clés du libellé (« Loyer mai », « Santé famille »).
+    return forText(category, fallback: fallback);
+  }
+
+  static const Map<String, IconData> _categories = <String, IconData>{
+    'alimentation': Icons.restaurant_rounded,
+    'nourriture': Icons.restaurant_rounded,
+    'repas': Icons.restaurant_rounded,
+    'transport': Icons.directions_car_rounded,
+    'deplacement': Icons.directions_car_rounded,
+    'loyer': Icons.home_rounded,
+    'logement': Icons.home_rounded,
+    'maison': Icons.home_rounded,
+    'sante': Icons.medical_services_rounded,
+    'ecole': Icons.school_rounded,
+    'education': Icons.school_rounded,
+    'scolarite': Icons.school_rounded,
+    'loisirs': Icons.celebration_rounded,
+    'sorties': Icons.celebration_rounded,
+    'epargne': Icons.savings_rounded,
+    'factures': Icons.receipt_long_rounded,
+    'services': Icons.receipt_long_rounded,
+    'tontine': Icons.groups_rounded,
+    'salaire': Icons.payments_rounded,
+    'vente': Icons.storefront_rounded,
+    'don': Icons.volunteer_activism_rounded,
+    'autre': Icons.more_horiz_rounded,
+  };
+
+  /// Minuscules sans accents : « Santé » et « sante » donnent la même icône.
+  static String _normalise(String value) {
+    final StringBuffer out = StringBuffer();
+    for (final int unit in value.toLowerCase().runes) {
+      final String char = String.fromCharCode(unit);
+      out.write(_accents[char] ?? char);
+    }
+    return out.toString().trim();
+  }
+
+  static const Map<String, String> _accents = <String, String>{
+    'à': 'a',
+    'â': 'a',
+    'ä': 'a',
+    'é': 'e',
+    'è': 'e',
+    'ê': 'e',
+    'ë': 'e',
+    'î': 'i',
+    'ï': 'i',
+    'ô': 'o',
+    'ö': 'o',
+    'ù': 'u',
+    'û': 'u',
+    'ü': 'u',
+    'ç': 'c',
+    'œ': 'oe',
+  };
+
   /// Icône correspondant au texte ; `fallback` si aucun mot-clé ne correspond.
   static IconData forText(
     String? text, {

@@ -4,9 +4,9 @@
 /// collé aux montants, jamais leur valeur. Les montants restent stockés en
 /// entiers, comme aujourd'hui, pour ne pas modifier la base des Étapes 1 à 9.
 ///
-/// Chaque devise porte l'URL d'un logo récupéré sur un CDN public (drapeau),
-/// mis en cache localement par `CurrencyLogoCache` ; hors ligne, l'interface
-/// affiche un jeton typographique aux couleurs de la charte.
+/// Chaque devise porte son drapeau **embarqué dans l'application**
+/// (`assets/logos/currencies/`) : le logo s'affiche donc même sans internet,
+/// dès le premier lancement. Aucun CDN n'est sollicité.
 enum AkibaCurrency {
   fcfa(
     storageKey: 'FCFA',
@@ -51,9 +51,8 @@ enum AkibaCurrency {
   /// Libellé complet pour les listes : « Euro (EUR) ».
   String get label => this == fcfa ? 'FCFA (XOF)' : '$name ($code)';
 
-  /// URL du logo, servie par un CDN public ; le cache local évite de la
-  /// solliciter à chaque affichage.
-  String get logoUrl => 'https://flagcdn.com/w160/$region.png';
+  /// Chemin de l'asset embarqué du logo (drapeau), disponible hors ligne.
+  String get assetPath => 'assets/logos/currencies/$region.png';
 
   /// Relit une valeur enregistrée à n'importe quelle étape précédente
   /// (`FCFA`, `XOF`, `fcfa`, `EUR`…). Repli : FCFA.

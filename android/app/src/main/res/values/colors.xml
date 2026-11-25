@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Fond du splash natif : terre cuite AKIBA (jamais du blanc). -->
-    <color name="akiba_splash">#C7673D</color>
+    <!-- Fond blanc du splash natif demandé pour AKIBA. -->
+    <color name="akiba_splash">#FFFFFF</color>
     <color name="akiba_splash_deep">#9E4B27</color>
+    <!-- Fond de l'icône adaptative Android 8+ (emblème sur fond blanc). -->
+    <color name="ic_launcher_background">#FFFFFF</color>
 </resources>

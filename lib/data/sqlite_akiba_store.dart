@@ -518,6 +518,53 @@ class SqliteAkibaStore implements AkibaStore {
   }
 
   @override
+  Future<TransactionRecord> settleDebt(
+    Debt debt, {
+    required int amount,
+    required String accountId,
+  }) async {
+    final int remaining = debt.remaining;
+    if (remaining <= 0) {
+      throw StateError('Cette créance ou dette est déjà soldée.');
+    }
+    final int settled = amount < remaining ? amount : remaining;
+    if (settled <= 0) {
+      throw StateError('Le montant du règlement doit être supérieur à zéro.');
+    }
+    final bool received = debt.direction == DebtDirection.owedToMe;
+    final DateTime now = DateTime.now();
+    final TransactionRecord movement = TransactionRecord(
+      id: 'debt-${debt.id}-${now.microsecondsSinceEpoch}',
+      accountId: accountId,
+      amount: received ? settled : -settled,
+      kind: received ? TransactionKind.income : TransactionKind.expense,
+      // Catégorie explicite : le règlement apparaît dans les analyses sans
+      // être confondu avec un salaire ou une dépense de la vie courante.
+      category: received ? 'Créance' : 'Dette',
+      note: received
+          ? 'Créance encaissée · ${debt.counterparty}'
+          : 'Dette remboursée · ${debt.counterparty}',
+      isNeutral: false,
+      occurredAt: now,
+      createdAt: now,
+    );
+    await saveTransaction(movement);
+    await saveDebt(
+      Debt(
+        id: debt.id,
+        direction: debt.direction,
+        counterparty: debt.counterparty,
+        principal: debt.principal,
+        settledAmount: debt.settledAmount + settled,
+        dueDate: debt.dueDate,
+        note: debt.note,
+        createdAt: debt.createdAt,
+      ),
+    );
+    return movement;
+  }
+
+  @override
   Future<void> deleteDebt(String id) async {
     _db.execute('DELETE FROM debts WHERE id = ?', <Object?>[id]);
   }

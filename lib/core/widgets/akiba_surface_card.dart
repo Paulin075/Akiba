@@ -32,7 +32,10 @@ class AkibaSurfaceCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(radius),
         boxShadow: showShadow ? c.cardShadow : const <BoxShadow>[],
       ),
-      child: child,
+      // Material transparent : les ListTile et SwitchListTile d'une carte
+      // peignent leurs encres sur ce Material plutôt que sur celui du Scaffold,
+      // sinon Flutter signale que le fond de la carte les rend invisibles.
+      child: Material(type: MaterialType.transparency, child: child),
     );
   }
 }

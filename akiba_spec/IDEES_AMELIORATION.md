@@ -1,9 +1,16 @@
-# IDEES_AMELIORATION — Pistes AKIBA
+﻿# IDEES_AMELIORATION — Pistes AKIBA
 
-Dernière mise à jour : **20/11/2026**. Les idées 19 (vues SQL agrégées) et 26
+Dernière mise à jour : **25/11/2026**. Depuis l'Étape 18, l'idée **110**
+(rappel d'échéance par dette, sans montant ni nom) est **appliquée**, ainsi qu'un
+reclassement direct depuis le détail d'un mouvement. Depuis l'Étape 17, les idées **71**
+(limitation des essais de PIN), **53** (date d'atteinte dynamique) et la lecture
+des **nombres en lettres** dans la dictée sont **appliquées**. Les idées 19 (vues SQL agrégées) et 26
 (libellés lecteur d'écran) sont **partiellement appliquées** depuis les Étapes
 1.2 et 1.3 : vue `v_account_balances` et libellés complets sur les lignes de
-mouvement. Les autres restent à arbitrer par le porteur du projet.
+mouvement. Depuis l'Étape 15, les idées 79 (dictée réelle + analyse automatique)
+et 118 (test Google sans dépôt, ici étendu au Home Lab) sont **appliquées** ;
+les idées 92 (rendu à deux largeurs) et 70 (Analyses sur 360 px) ont leur
+premier test automatisé à 320 px. Les autres restent à arbitrer par le porteur.
 
 ---
 
@@ -214,6 +221,8 @@ mouvement. Les autres restent à arbitrer par le porteur du projet.
 
 79. **Reconnaissance vocale locale** : remplacer le halo par une vraie dictée
     (greffon `speech_to_text` ou modèle embarqué), avec repli clavier assumé.
+    → *fait depuis l'Étape 15* : dictée `onDevice`, et **analyse automatique dès
+    la fin de la phrase** (aucun bouton « Analyser » à cliquer).
 80. **Apprentissage des corrections** : quand une catégorie proposée par l'IA est
     corrigée trois fois pour le même mot, la mémoriser localement.
 81. **Revue SMS par lot** : sélectionner plusieurs messages et appliquer le même
@@ -308,6 +317,10 @@ mouvement. Les autres restent à arbitrer par le porteur du projet.
      pour l'analyse ou le coaching (plus coûteux).
 118. **Test Google sans dépôt** : bouton « Tester la connexion » qui appelle
      seulement les métadonnées du compte, sans créer de fichier.
+     → *fait pour Home Lab à l'Étape 15* : `BackupService.probeRemote` + bouton
+     « Tester la connexion » (GET en lecture seule, jeton Bearer), avec retour
+     précis sur le jeton refusé, le certificat ou l'injoignabilité. Pour Google,
+     l'appel de métadonnées reste à faire.
 119. **Choix de la version Drive** : lister les cinq sauvegardes datées et
      laisser restaurer celle que l'on veut, plutôt que la plus récente.
 120. **Journal des connexions** : conserver localement date, appareil et
@@ -341,3 +354,183 @@ mouvement. Les autres restent à arbitrer par le porteur du projet.
 132. **Mode démonstration des thèmes** : parcourir les cinq palettes sans
      enregistrer, puis confirmer, pour comparer sereinement.
 
+## Étape 14 — Rectification
+
+Les mentions historiques de phrases secrètes, serveur maître et dictée vocale sont supersédées : sauvegarde AES-256-GCM sans phrase, Google Drive/Home Lab uniquement et reconnaissance `onDevice`. À prioriser comme recette : OAuth sur compte test autorisé, Workmanager/permissions sur appareil, restauration réelle et captures des cinq thèmes. Multi-comptes Google et choix d’une version Drive restent des pistes futures.
+
+Le flux Android utilise désormais une URL d’autorisation minimale du client Desktop (loopback racine, PKCE, `state`). Si cette méthode n’est pas acceptée par Google pour l’environnement Android, la piste correcte est l’intégration Google Identity Services native (client Android avec empreinte SHA-1), et non l’ajout d’autres paramètres à l’URL.
+
+Le splash étant désormais blanc, vérifier sur appareil que le contraste du logo et du cauri animé reste satisfaisant dans les conditions réelles.
+
+## 21. Nouvelles pistes issues de l'Étape 15 (vitesse, PIN, vocal, sauvegardes)
+
+133. **Ouverture sans splash** : proposer « Ne plus afficher l'animation » après
+     dix lancements, tout en gardant le geste cochon + cauri pour les versements.
+134. **Animation adaptative** : 3 s complètes au premier lancement, 1,2 s aux
+     suivants, jamais en dessous de 400 ms.
+135. **Cauri par coffre** : teinter légèrement le cauri selon le coffre visé
+     (urgence, objectif, libre) sans jamais changer la forme du geste.
+136. **Verrouillage progressif** : après trois codes faux, délai croissant et
+     message neutre, sans révéler le nombre d'essais restants (idée 71).
+137. **Verrou de prévisualisation** : flouter la liste des tâches récentes du
+     système quand le PIN est actif (protection contre l'aperçu Android).
+138. **Résumé de dictée** : afficher la phrase entendue au-dessus de la carte
+     pour que l'utilisateur voie immédiatement une mauvaise transcription.
+139. **Contacts appris** : mémoriser les noms déjà utilisés en créance / dette
+     pour les proposer en autocomplétion sur la carte de compréhension.
+140. **Créance sans montant** : accepter « Koffi me doit de l'argent » en
+     demandant le montant dans la carte plutôt qu'en refusant la phrase.
+141. **Teinte d'absence** : si le Home Lab ne répond pas au test, proposer de
+     mémoriser le dernier échec avec son horodatage, sans montant.
+142. **Diagnostic Google en un écran** : afficher les trois causes les plus
+     probables (client Web au lieu de Desktop, identifiant avec espace, portée
+     non déclarée) plutôt qu'un seul message d'erreur.
+143. **Plan de repli visible** : quand la connexion Google échoue, mettre le
+     dossier synchronisé en avant (bouton « Utiliser le dossier ») au lieu de
+     laisser l'utilisateur chercher le champ.
+144. **Icônes de catégorie personnalisables** : laisser choisir une icône par
+     catégorie dans les réglages, les noms restant la clé de correspondance.
+145. **Catégories traduites** : la table `categories` paramétrable (M06) doit
+     réutiliser `LabelIcons.forCategory`, y compris pour les libellés anglais.
+146. **Test de charge du splash** : mesurer le temps jusqu'à la première image
+     sur un appareil bas de gamme et le consigner dans `DEJA_FAIT.md`.
+
+## 22. Pistes issues de l'Étape 16 (visuels, ouverture, IA multi-fournisseurs)
+
+147. **Choix guidé du fournisseur** : proposer un test de connexion au moment
+     du choix, avec le modèle et la latence mesurés, plutôt qu'un simple OK/échec.
+148. **Modèles Ollama détectés** : lister les modèles réellement installés sur
+     l'instance (`/api/tags`) et proposer le plus petit pour la saisie rapide.
+149. **Comparateur de fournisseurs** : rejouer les dix dernières phrases sur deux
+     fournisseurs et garder celui qui répond le mieux, sans jamais envoyer de
+     montants en mode masqué.
+150. **Coût par appel** : afficher le nombre d'unités consommées par fournisseur
+     dans le quota du jour, sans montant financier.
+151. **Détourage à la demande** : un petit outil dans `tool/` pour vérifier
+     qu'aucun nouveau visuel n'a de frange blanche sur fond crème.
+152. **Ouverture mémorisée** : ne plus montrer l'animation après dix lancements,
+     tout en gardant le geste cochon + cauri pour les versements (idée 133).
+
+## 23. Pistes issues de l'Étape 19 (configuration Google automatique)
+
+153. **Fraîcheur de la copie embarquée** : comparer l'horodatage de
+     `secrets/google_oauth.json` et de `assets/config/google_oauth.json` au
+     démarrage (mode développement) et afficher un rappel discret « relancez
+     tool/sync_oauth_secrets.dart » plutôt que de découvrir un identifiant
+     périmé au moment de la connexion.
+154. **Test de configuration en un appui** : dans le centre de sauvegarde,
+     valider l'identifiant (format, suffixe, en-tête de l'URL d'autorisation)
+     sans ouvrir le navigateur, et afficher la cause précise avant l'erreur
+     Google.
+155. **Pré-vol Android** : détecter que la redirection de boucle locale est
+     utilisée depuis Android et proposer directement le repli « dossier
+     synchronisé » avec un bouton, au lieu d'attendre le refus de Google.
+
+## 24. Pistes issues de l'Étape 20 (Android natif et copie automatique)
+
+156. **Test de bout en bout sur appareil** : un scénario instrumenté qui connecte
+     un compte testeur, dépose une sauvegarde et la restaure, avec les deux voies
+     (Android natif et ordinateur) et un refus volontaire pour vérifier le repli.
+157. **Diagnostic SHA-1 intégré** : dans le Profil (mode développeur), afficher
+     l'empreinte de signature de l'APK installé et la comparer au client Android
+     déclaré, pour éviter de chercher l'erreur 28444 dans les journaux.
+158. **Détection de copie périmée dans l'APK** : embarquer l'empreinte courte de
+     l'identifiant dans les métadonnées de build et la comparer à `secrets/` au
+     démarrage sur ordinateur, afin de signaler un APK construit avant une
+     rotation d'identifiant.
+159. **Second compte Google** : `google_sign_in` ne gère qu'un compte à la fois ;
+     proposer « Changer de compte » en enchaînant `signOut` puis `authenticate`
+     depuis l'écran de sauvegarde.
+
+## 25. Pistes issues de l'Étape 22 (langue, permissions, règlements, déconnexion)
+
+160. **Règlement partiel guidé** : proposer 25 / 50 / 75 / 100 % du reste dû en
+     un appui, avec le compte mémorisé par contact, au lieu de ressaisir le
+     montant à chaque fois.
+161. **Reçu de règlement** : après un encaissement ou un paiement, afficher une
+     ligne récapitulative (compte, nouveau solde, reste dû) dans l'historique
+     des mouvements, sans jamais exposer le montant si le masquage est actif.
+162. **Rapprochement créance/dette** : détecter qu'une entrée de compte
+     correspond à une créance ouverte du même contact et proposer le règlement,
+     au lieu de laisser deux lignes indépendantes.
+163. **Langue par écran** : mémoriser le dernier écran d'onboarding pour que la
+     bascule français/anglais reprenne exactement au même endroit.
+164. **Diagnostic réseau Home Lab** : afficher l'adresse réellement testée
+     (schéma compris), le temps de réponse et la cause du refus de connexion
+     dans une petite carte, plutôt qu'une seule ligne de texte.
+165. **Déconnexion multi-comptes** : « Changer de compte Google » enchaînant
+     `signOut` puis `signIn`, avec le choix du compte, sans toucher aux données
+     locales.
+166. **Journal des déconnexions** : conserver localement date et appareil de la
+     dernière déconnexion Google, sans jeton ni adresse.
+167. **Vérification de l'autorisation avant planification** : exposer dans le
+     Profil un état lisible « autorisé / refusé / refusé définitivement » relu
+     au retour des réglages système.
+
+## 26. Pistes issues de l'Étape 23 (SMS arrière-plan, bienvenue)
+
+168. **Notification avec montant masqué intelligent** : afficher « +•••• FCFA »
+     quand le masquage est actif et « +25 000 FCFA » sinon, en stockant le
+     drapeau de masquage dans une préférence native non sensible (jamais de
+     montant en clair).
+169. **Rapprochement de SMS en double** : ignorer un SMS déjà transformé en
+     écriture (référence d'opérateur conservée localement, chiffrée).
+170. **Réglage fin des expéditeurs** : laisser ajouter un nom de banque ou un
+     numéro court aux sources reconnues, sans changer le code.
+171. **Notification groupée** : regrouper plusieurs SMS financiers reçus dans la
+     même heure en une seule notification « 3 opérations à vérifier ».
+172. **Bienvenue contextuelle** : proposer dans la notification un premier pas
+     concret (premier compte, premier versement) et mesurer le retour dans
+     l'application sans télémétrie distante.
+173. **Test instrumenté du récepteur** : un test Android (`androidTest`) qui
+     injecte un SMS Flooz, Mixx et Orabank et vérifie la notification et
+     l'ouverture de la fiche, sans passer par un second téléphone.
+174. **Confirmation rapide depuis la notification** : action « Ouvrir la fiche »
+     et « Ignorer » directement dans la notification, en gardant la validation
+     manuelle obligatoire.
+
+## 27. Pistes issues du rapport mensuel (Étape 24)
+
+175. **Rapport sur une page** : compacter les blocs et passer en deux colonnes pour
+     éviter la deuxième page A4.
+176. **Graphique en anneau** des catégories, dessiné nativement dans le PDF.
+177. **Comparaison mois précédent** : variation en pourcentage sur chaque
+     indicateur, avec une flèche discrète.
+178. **Rapport annuel** agrégé, même moteur, avec sélection d'exercice.
+179. **Envoi planifié** vers le Home Lab à une heure choisie (toujours local).
+180. **Signature locale** du PDF (empreinte SHA-256 affichée) pour vérifier
+     qu'il n'a pas été modifié après génération.
+181. **Modèles d'avis** : laisser choisir entre « bienveillant », « direct » et
+     « taquin » avant l'analyse IA.
+
+## 28. Pistes issues des messages d'épargne (Étape 25)
+
+182. **Ton réglable** : catalogue sérieux / taquin / très taquin, mémorisé.
+183. **Messages liés à l'objectif** : célébrer les paliers (25 %, 50 %, 75 %)
+     sans jamais afficher de montant.
+184. **Taquineries contextuelles** : distinguer un retrait d'urgence d'un
+     retrait d'impulsion à partir de la catégorie, sans jugement.
+185. **Voix** : lire le message à voix haute si la synthèse vocale de
+     l'appareil est disponible et si la personne l'active.
+186. **Historique local** des messages déjà vus, pour éviter les répétitions
+     au-delà de la seule fois précédente.
+
+## 29. Suites possibles après l’Étape 26
+
+187. **Récupération du compte Google perdu** : documenter une procédure de migration si l’utilisateur change de compte Google, sans exposer de clé dans l’interface.
+188. **Préférence de son d’épargne** : interrupteur indépendant et choix entre clic discret / vibration, en respectant le mode silencieux et « Réduire les animations ».
+189. **Test Android des permissions** : automatiser la demande POST_NOTIFICATIONS, l’aller-retour vers Paramètres et la relecture à la reprise.
+190. **Aperçu du PDF avec avatar** : vérifier sur appareil le recadrage circulaire et les noms très longs dans l’en-tête.
+
+## 30. Suites possibles après l’Étape 27
+
+191. **Diagnostic des canaux de notification** : distinguer la permission POST_NOTIFICATIONS, le canal AKIBA désactivé et les restrictions de planification Android. Le test instrumenté API 33+ figure déjà en idée 189.
+
+## 31. Suites possibles après l’Étape 28
+
+192. **Canaux désactivés par application** : distinguer, dans le diagnostic de reprogrammation, POST_NOTIFICATIONS accordée d’un canal de bienvenue ou de rappels désactivé dans Android. → *partiellement fait* : le faux négatif venait de l’icône d’initialisation (voir Étape 29), pas du canal ; le Profil lit désormais l’importance de `akiba_rappels`. Reste à constater sur appareil le canal `akiba_accueil` et les deux cas désactivés.
+
+## 32. Suites possibles après l’Étape 29
+
+193. **Garde-fou d’icône de notification** : vérifier par un test instrumenté que l’icône par défaut (`drawable/ic_stat_akiba`) se résout avant la première planification, pour qu’un renommage de ressource ne réintroduise pas un faux négatif silencieux « non autorisé ».
+194. **Diagnostic visible en cas d’échec d’initialisation** : afficher `LocalNotifications.lastError` (code `invalid_icon`, canal introuvable) dans le Profil plutôt qu’un simple refus, afin de distinguer une panne du greffon d’une vraie révocation système.

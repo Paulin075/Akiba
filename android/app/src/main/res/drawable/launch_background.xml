@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Splash natif AKIBA : fond terre cuite de la palette, icône centrée. -->
+<!-- Splash natif AKIBA : fond blanc et icône centrée. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
@@ -10,8 +10,10 @@
         android:width="128dp"
         android:height="128dp"
         android:gravity="center">
+        <!-- Image dédiée : un <bitmap> ne peut pas pointer vers l'icône
+             adaptative (XML) sur Android 8+. -->
         <bitmap
             android:gravity="center"
-            android:src="@mipmap/ic_launcher" />
+            android:src="@drawable/akiba_launch_logo" />
     </item>
 </layer-list>

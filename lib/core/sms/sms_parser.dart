@@ -58,7 +58,7 @@ class SmsDraft {
 
 abstract final class SmsParser {
   static final RegExp _amount = RegExp(
-    r'(\d{1,3}(?:[ .]\d{3})+|\d+)(?:[.,](\d{2}))?\s*(?:FCFA|XOF|CFA)',
+    r'(\d{1,3}(?:[ .]\d{3})+|\d+)(?:[.,](\d{2}))?\s*(?:F\s?CFA|XOF|CFA)',
     caseSensitive: false,
   );
 
@@ -69,9 +69,19 @@ abstract final class SmsParser {
     'réception',
     'credit',
     'crédit',
+    'credite',
+    'crédité',
     'depose',
     'déposé',
+    'depot',
+    'dépôt',
     'versement',
+    'verse',
+    'versé',
+    'virement recu',
+    'virement reçu',
+    'virement en votre faveur',
+    'remboursement',
     'ajoute',
     'ajouté',
   ];
@@ -88,9 +98,38 @@ abstract final class SmsParser {
     'retrait',
     'debit',
     'débit',
+    'debite',
+    'débité',
     'prelevé',
     'prélevé',
+    'prelevement',
+    'prélèvement',
+    'virement emis',
+    'virement émis',
+    'cheque',
+    'chèque',
     'facture',
+    'dab',
+    'carte bancaire',
+    'commission',
+  ];
+
+  /// Banques reconnues en plus d'Orabank : le libellé reste générique quand le
+  /// nom exact n'est pas dans la liste.
+  static const List<String> _bankWords = <String>[
+    'orabank',
+    'bank',
+    'banque',
+    'boa',
+    'ecobank',
+    'coris',
+    'nsia',
+    'ubs',
+    'bsic',
+    'attijari',
+    'société générale',
+    'societe generale',
+    'sgci',
   ];
 
   /// Découpe un texte en messages (un SMS par ligne vide ou « --- »).
@@ -145,8 +184,12 @@ abstract final class SmsParser {
       operator = 'Flooz';
     } else if (lower.contains('mixx') || lower.contains('yas')) {
       operator = 'Mixx by Yas';
-    } else if (lower.contains('orabank') || lower.contains('bank')) {
+    } else if (lower.contains('orabank')) {
       operator = 'Orabank';
+    } else if (_bankWords.any(lower.contains)) {
+      // Banque non nommée précisément : on garde un libellé générique pour que
+      // la fiche propose le compte bancaire sans inventer d'établissement.
+      operator = 'Banque';
     }
 
     final RegExpMatch? reference = RegExp(

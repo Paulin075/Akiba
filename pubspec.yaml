@@ -36,6 +36,10 @@ hooks:
 dependencies:
   flutter:
     sdk: flutter
+  # Libellés Material (sélecteurs de date/heure, boutons système) en français
+  # et en anglais, alignés sur la langue choisie dans les réglages.
+  flutter_localizations:
+    sdk: flutter
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -56,6 +60,9 @@ dependencies:
   permission_handler: ^13.0.2
   speech_to_text: ^7.5.0
   workmanager: ^0.10.10
+  google_sign_in: ^7.2.0
+  pdf: 3.12.0
+  printing: 5.14.2
 
 dev_dependencies:
   flutter_test:
@@ -83,7 +90,14 @@ flutter:
   assets:
     - assets/brand/
     - assets/logos/
+    # Logos de devises embarqués : visibles même sans internet.
+    - assets/logos/currencies/
     - assets/profile/
+    # Copie embarquée des identifiants Google OAuth, produite depuis
+    # `secrets/` (ignoré par Git) par la tâche Gradle `syncOAuthSecrets` avant
+    # chaque build Android. Le dossier est versionné, le fichier ne l'est pas :
+    # un simple `flutter run` charge la configuration sans option.
+    - assets/config/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../format/akiba_money.dart';
+import '../state/akiba_l10n.dart';
 import '../theme/akiba_colors.dart';
 import '../theme/akiba_tokens.dart';
 import '../theme/akiba_typography.dart';
@@ -78,7 +79,7 @@ class BalanceCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  'SOLDE DISPONIBLE',
+                  AkibaL10n.tr('available_balance_caps'),
                   style: AkibaTypography.label.copyWith(
                     color: soft,
                     letterSpacing: 1.4,
@@ -98,10 +99,12 @@ class BalanceCard extends StatelessWidget {
                 const SizedBox(height: AkibaSpacing.sm),
                 Text(
                   masked
-                      ? 'Comptes + épargne − argent de tiers'
-                      : 'Comptes ${AkibaMoney.format(totalAccounts)}'
-                            ' + épargne ${AkibaMoney.format(savingsHeld)}'
-                            ' − tiers ${AkibaMoney.format(thirdPartyHeld)}',
+                      ? AkibaL10n.tr('accounts_savings_third_masked')
+                      : AkibaL10n.tr('accounts_savings_third', <String, String>{
+                          'accounts': AkibaMoney.format(totalAccounts),
+                          'savings': AkibaMoney.format(savingsHeld),
+                          'third': AkibaMoney.format(thirdPartyHeld),
+                        }),
                   maxLines: 2,
                   style: AkibaTypography.legend.copyWith(
                     color: faint,
@@ -114,7 +117,7 @@ class BalanceCard extends StatelessWidget {
                     Expanded(
                       child: ActionPill(
                         icon: Icons.swap_horiz_rounded,
-                        label: 'Transférer',
+                        label: AkibaL10n.tr('transfer_action'),
                         tone: ActionPillTone.ochre,
                         onTap: onTransfer,
                       ),
@@ -123,7 +126,7 @@ class BalanceCard extends StatelessWidget {
                     Expanded(
                       child: ActionPill(
                         icon: Icons.add_rounded,
-                        label: 'Ajouter',
+                        label: AkibaL10n.tr('add_action'),
                         tone: ActionPillTone.white,
                         onTap: onAdd,
                       ),

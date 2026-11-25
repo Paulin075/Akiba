@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as hash;
@@ -49,6 +50,23 @@ String backupStageLabel(BackupStage stage) => switch (stage) {
 /// **AES-256-GCM** avec une clé de 256 bits conservée dans le coffre du système
 /// (Keystore Android / DPAPI Windows). L'enveloppe ne contient en clair que des
 /// métadonnées non sensibles (date, appareil, compteurs, empreinte SHA-256).
+/// Résultat d'un test de connexion au Home Lab.
+class HomeLabProbe {
+  const HomeLabProbe({
+    required this.reachable,
+    required this.authenticated,
+    required this.message,
+    this.statusCode,
+  });
+
+  final bool reachable;
+  final bool authenticated;
+  final String message;
+  final int? statusCode;
+
+  bool get ok => reachable && authenticated;
+}
+
 class BackupService {
   BackupService(
     this._store, [
@@ -68,8 +86,10 @@ class BackupService {
   final FlutterSecureStorage _storage;
   final List<int>? _keyOverride;
 
-  static const int formatVersion = 2;
+  static const int formatVersion = 3;
   static const int keyLength = 32;
+  static const int _pbkdf2Iterations = 120000;
+  static const String _applicationSalt = 'AKIBA|backup|AES-256-GCM|v3';
   static const String _keyName = 'akiba_backup_key';
 
   /// Réglages jamais sauvegardés ou jamais restaurés.
@@ -111,12 +131,18 @@ class BackupService {
 
   Future<Map<String, dynamic>> createEnvelope({
     required String deviceId,
+    String? googleAccountId,
     void Function(BackupStage)? onStage,
   }) async {
     onStage?.call(BackupStage.preparing);
     final Map<String, dynamic> payload = await collectPayload();
     final List<int> plain = utf8.encode(jsonEncode(payload));
-    final List<int> key = await _key(create: true);
+    final List<int> salt = googleAccountId == null || _keyOverride != null
+        ? const <int>[]
+        : List<int>.generate(16, (_) => Random.secure().nextInt(256));
+    final List<int> key = googleAccountId != null && _keyOverride == null
+        ? _deriveKey(googleAccountId, salt)
+        : await _key(create: true);
     if (key.length != keyLength) {
       throw const BackupException(
         'Clé de sauvegarde indisponible sur cet appareil.',
@@ -129,9 +155,12 @@ class BackupService {
 
     return <String, dynamic>{
       'format': 'akiba-backup',
-      'version': formatVersion,
+      'version': googleAccountId != null && _keyOverride == null ? 3 : 2,
       'cipher': 'AES-256-GCM',
-      'kdf': 'device-key',
+      'kdf': googleAccountId != null && _keyOverride == null
+          ? 'PBKDF2-HMAC-SHA256'
+          : 'device-key',
+      if (salt.isNotEmpty) 'salt': base64Encode(salt),
       'keyId': hash.sha256.convert(key).toString().substring(0, 16),
       'ciphertext': sealed,
       'sha256': hash.sha256.convert(plain).toString(),
@@ -197,10 +226,30 @@ class BackupService {
 
   Future<Map<String, dynamic>> decryptEnvelope(
     Map<String, dynamic> envelope, {
+    String? googleAccountId,
     void Function(BackupStage)? onStage,
   }) async {
     _checkEnvelope(envelope);
-    final List<int> key = await _key();
+    final String kdf = envelope['kdf'] as String? ?? 'device-key';
+    final List<int> key;
+    if (kdf == 'PBKDF2-HMAC-SHA256') {
+      if (googleAccountId == null || googleAccountId.isEmpty) {
+        throw const BackupException(
+          'Connectez le même compte Google pour restaurer cette sauvegarde.',
+        );
+      }
+      final Object? rawSalt = envelope['salt'];
+      if (rawSalt is! String) {
+        throw const BackupException('Sel de sauvegarde manquant ou invalide.');
+      }
+      try {
+        key = _deriveKey(googleAccountId, base64Decode(rawSalt));
+      } catch (_) {
+        throw const BackupException('Sel de sauvegarde invalide.');
+      }
+    } else {
+      key = await _key();
+    }
     if (key.length != keyLength) {
       throw const BackupException(
         'Cette sauvegarde appartient à un autre appareil : sa clé AES-256 '
@@ -255,11 +304,13 @@ class BackupService {
   /// locales : les identifiants déjà présents sont ignorés.
   Future<Map<String, int>> restore(
     Map<String, dynamic> envelope, {
+    String? googleAccountId,
     void Function(BackupStage)? onStage,
   }) async {
     onStage?.call(BackupStage.downloading);
     final Map<String, dynamic> payload = await decryptEnvelope(
       envelope,
+      googleAccountId: googleAccountId,
       onStage: onStage,
     );
 
@@ -470,14 +521,184 @@ class BackupService {
     }
   }
 
-  Uri _checkedUri(String raw) {
-    final Uri? uri = Uri.tryParse(raw.trim());
+  /// Teste l'accessibilité **et** l'authentification du serveur Home Lab,
+  /// sans rien écrire : un simple GET en lecture seule.
+  ///
+  /// Le résultat est toujours rendu en clair (serveur joignable ou non, jeton
+  /// accepté ou refusé) pour que l'utilisateur sache quoi corriger.
+  Future<HomeLabProbe> probeRemote({
+    required String url,
+    required String token,
+  }) async {
+    final Uri uri;
+    try {
+      uri = _checkedUri(url);
+    } on BackupException catch (error) {
+      return HomeLabProbe(
+        reachable: false,
+        authenticated: false,
+        message: error.message,
+      );
+    }
+    final HttpClient client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 8)
+      ..userAgent = 'AKIBA-probe/1.0';
+    try {
+      final HttpClientRequest request = await client.getUrl(uri);
+      if (token.trim().isNotEmpty) {
+        request.headers.set('Authorization', 'Bearer ${token.trim()}');
+      }
+      request.headers.set('X-Akiba-Probe', '1');
+      request.headers.set('Accept', 'application/json');
+      final HttpClientResponse response = await request.close().timeout(
+        const Duration(seconds: 15),
+      );
+      // Le corps n'est pas nécessaire : on le vide pour libérer la connexion.
+      await response.drain<void>().timeout(const Duration(seconds: 10));
+      final int status = response.statusCode;
+      if (status == 200 || status == 204) {
+        return HomeLabProbe(
+          reachable: true,
+          authenticated: true,
+          statusCode: status,
+          message:
+              'Serveur Home Lab joignable et jeton accepté (HTTP $status).',
+        );
+      }
+      if (status == 404) {
+        return HomeLabProbe(
+          reachable: true,
+          authenticated: true,
+          statusCode: status,
+          message:
+              'Serveur joignable et jeton accepté, aucune sauvegarde à cette '
+              'adresse (HTTP 404) : la première sauvegarde la créera.',
+        );
+      }
+      if (status == 401 || status == 403) {
+        return HomeLabProbe(
+          reachable: true,
+          authenticated: false,
+          statusCode: status,
+          message:
+              'Serveur joignable, mais le jeton est refusé (HTTP $status). '
+              'Vérifiez le jeton d’accès Home Lab.',
+        );
+      }
+      return HomeLabProbe(
+        reachable: true,
+        authenticated: false,
+        statusCode: status,
+        message:
+            'Serveur joignable, mais il répond HTTP $status : vérifiez '
+            'l’adresse exacte de la sauvegarde AKIBA.',
+      );
+    } on HandshakeException {
+      return const HomeLabProbe(
+        reachable: false,
+        authenticated: false,
+        message:
+            'Certificat HTTPS refusé : utilisez un certificat reconnu par '
+            'l’appareil, ou l’adresse http:// sur le réseau local.',
+      );
+    } on SocketException catch (error) {
+      // Refus de connexion (port fermé) et hôte introuvable sont deux causes
+      // différentes : on le dit, au lieu d'un « injoignable » générique.
+      final int? code = error.osError?.errorCode;
+      final String detail =
+          code == 111 ||
+              code == 61 ||
+              code == 10061 ||
+              error.message.toLowerCase().contains('refused') ||
+              InternetAddress.tryParse(uri.host) != null
+          ? 'connexion refusée (port fermé) : vérifiez le port et que le '
+                'service Home Lab écoute'
+          : code == 11001 || code == 8
+          ? 'nom introuvable : saisissez l’IP du serveur sur le même Wi-Fi'
+          : 'aucune route vers le serveur : vérifiez que l’appareil est sur le '
+                'même réseau, sans VPN';
+      return HomeLabProbe(
+        reachable: false,
+        authenticated: false,
+        message: 'Serveur injoignable — $detail.',
+      );
+    } on TimeoutException {
+      return const HomeLabProbe(
+        reachable: false,
+        authenticated: false,
+        message:
+            'Aucune réponse en 8 s : le serveur est peut-être éteint, filtré '
+            'par le pare-feu ou sur un autre réseau.',
+      );
+    } on HttpException catch (error) {
+      return HomeLabProbe(
+        reachable: false,
+        authenticated: false,
+        message:
+            'Connexion interrompue (${error.message}). Vérifiez le schéma '
+            'http/https et le port du serveur.',
+      );
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// Normalise une adresse Home Lab saisie à la main.
+  ///
+  /// Une IP seule (`192.168.1.80`), un hôte avec port (`192.168.1.80:8080`)
+  /// ou un nom (`akiba.local`) sont acceptés : le schéma `http://` est ajouté
+  /// quand il manque. Sans cette tolérance, `Uri.parse` lisait `192.168…`
+  /// comme un schéma et le test répondait « adresse invalide ».
+  static String? normalizeUrl(String raw) {
+    final String trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    String candidate = trimmed;
+    final bool hasScheme = RegExp(
+      r'^[a-zA-Z][a-zA-Z0-9+.-]*://',
+    ).hasMatch(candidate);
+    if (!hasScheme) candidate = 'http://$candidate';
+    final Uri? uri = Uri.tryParse(candidate);
     if (uri == null ||
         !(uri.scheme == 'http' || uri.scheme == 'https') ||
-        uri.host.isEmpty) {
-      throw const BackupException('Adresse invalide (http ou https attendu).');
+        uri.host.isEmpty ||
+        !uri.hasAuthority) {
+      return null;
     }
-    return uri;
+    // Un URI du type « http:///chemin » n'a pas d'hôte exploitable.
+    if (uri.host.contains(' ') || uri.host == 'localhost.') return null;
+    return candidate;
+  }
+
+  Uri _checkedUri(String raw) {
+    final String? normalized = normalizeUrl(raw);
+    if (normalized == null) {
+      throw const BackupException(
+        'Adresse invalide : saisissez une IP ou un nom, par exemple '
+        '192.168.1.80:8080 ou https://akiba.local/backup.',
+      );
+    }
+    return Uri.parse(normalized);
+  }
+
+  List<int> _deriveKey(String googleAccountId, List<int> salt) {
+    if (googleAccountId.trim().isEmpty || salt.length != 16) {
+      throw const BackupException(
+        'Compte Google ou sel de sauvegarde invalide.',
+      );
+    }
+    final List<int> password = utf8.encode(
+      '$_applicationSalt|${googleAccountId.trim()}',
+    );
+    final List<int> block = <int>[...salt, 0, 0, 0, 1];
+    List<int> u = hash.Hmac(hash.sha256, password).convert(block).bytes;
+    final List<int> output = List<int>.from(u);
+    for (int iteration = 1; iteration < _pbkdf2Iterations; iteration++) {
+      u = hash.Hmac(hash.sha256, password).convert(u).bytes;
+      for (int i = 0; i < output.length; i++) {
+        output[i] ^= u[i];
+      }
+    }
+    return output;
   }
 
   // ------------------------------------------------------------------ Outils

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -9,9 +11,11 @@ import '../../core/config/google_oauth_config.dart';
 import '../../core/format/akiba_currency.dart';
 import '../../core/format/akiba_date.dart';
 import '../../core/format/akiba_money.dart';
-import '../../core/notifications/local_notifications.dart';
+import '../../core/notifications/app_notifications.dart';
+import '../../core/notifications/notification_permission.dart';
 import '../../core/security/pin_vault.dart';
 import '../../core/state/akiba_data_revision.dart';
+import '../../core/state/akiba_l10n.dart';
 import '../../core/state/akiba_settings.dart';
 import '../../core/theme/akiba_colors.dart';
 import '../../core/theme/akiba_theme.dart';
@@ -37,18 +41,22 @@ class OnboardingFlow extends StatefulWidget {
     required this.settings,
     required this.revision,
     required this.onFinished,
+    this.notificationPermissionGateway =
+        const SystemNotificationPermissionGateway(),
   });
 
   final AkibaStore store;
   final AkibaSettings settings;
   final AkibaDataRevision revision;
   final VoidCallback onFinished;
+  final NotificationPermissionGateway notificationPermissionGateway;
 
   @override
   State<OnboardingFlow> createState() => _OnboardingFlowState();
 }
 
-class _OnboardingFlowState extends State<OnboardingFlow> {
+class _OnboardingFlowState extends State<OnboardingFlow>
+    with WidgetsBindingObserver {
   static const int steps = 11;
 
   late int _step;
@@ -85,7 +93,12 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   bool _permissionSms = false;
   bool _permissionMicro = false;
   bool _permissionWifi = false;
+
+  /// Une demande système est en cours : l'interrupteur reste sur son état
+  /// d'attente au lieu d'afficher « refusé » avant la réponse.
+  bool _requestingPermission = false;
   String? _permissionNote;
+  bool _permissionNeedsSettings = false;
   bool _simulation = false;
   int _savingsGoal = 10;
   int _openingTotal = 0;
@@ -97,9 +110,37 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _step = widget.settings.onboardingStep.clamp(0, steps - 1);
     _firstName = TextEditingController(text: widget.settings.firstName);
     _lastName = TextEditingController(text: widget.settings.lastName);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _step == 7) {
+      _refreshNotificationPermission();
+    }
+  }
+
+  Future<void> _refreshNotificationPermission() async {
+    final NotificationPermissionState permission = await widget
+        .notificationPermissionGateway
+        .status();
+    if (!mounted || permission == NotificationPermissionState.unavailable) {
+      return;
+    }
+    final bool granted = permission == NotificationPermissionState.granted;
+    setState(() {
+      _permissionNotifications = granted;
+      _permissionNeedsSettings =
+          permission == NotificationPermissionState.permanentlyDenied;
+      _permissionNote = _permissionNeedsSettings
+          ? 'Autorisation toujours refusée : ouvrez les réglages de notification '
+                'd’AKIBA pour l’accorder.'
+          : null;
+    });
+    await widget.settings.setFlag('permission_notifications', granted);
   }
 
   @override
@@ -132,6 +173,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
       _googleEmail = email;
       if (email != null) _googleLinked = true;
     });
+    if (email != null) await _checkDriveBackup();
   }
 
   /// Connexion Google facultative : un échec laisse l'étape intacte.
@@ -257,41 +299,102 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     }
   }
 
+  void _setPermission(String kind, bool value) {
+    switch (kind) {
+      case 'notifications':
+        _permissionNotifications = value;
+      case 'sms':
+        _permissionSms = value;
+      case 'micro':
+        _permissionMicro = value;
+      case 'wifi':
+        _permissionWifi = value;
+    }
+  }
+
   /// Demande la **vraie** autorisation système, et reflète l'état accordé.
+  ///
+  /// Ordre strict : on lit d'abord l'état réel (déjà accordé = succès, aucune
+  /// fenêtre), puis on demande, puis on **relit** l'état. Un refus n'est
+  /// affiché que si le système a réellement dit non ; une demande en cours ne
+  /// produit aucun message et l'interrupteur reste sur son état d'attente.
   Future<void> _requestPermission(String kind, bool enable) async {
     if (!enable) {
       setState(() {
-        switch (kind) {
-          case 'notifications':
-            _permissionNotifications = false;
-          case 'sms':
-            _permissionSms = false;
-          case 'micro':
-            _permissionMicro = false;
-          case 'wifi':
-            _permissionWifi = false;
-        }
+        _setPermission(kind, false);
         _permissionNote = null;
+        _permissionNeedsSettings = false;
+      });
+      if (kind == 'notifications') {
+        await widget.settings.setFlag('permission_notifications', false);
+      }
+      return;
+    }
+    if (_requestingPermission) return;
+
+    // Windows / Linux de bureau : aucune autorisation de notification n'existe
+    // au niveau du système. On ne prétend pas qu'elle est refusée.
+    if (kind == 'notifications' &&
+        !widget.notificationPermissionGateway.isSupported) {
+      setState(() {
+        _permissionNotifications = true;
+        _permissionNeedsSettings = false;
+        _permissionNote =
+            'Les rappels sont prêts. Sur cet ordinateur, la livraison système '
+            'n’est pas encore prise en charge : les messages s’affichent dans '
+            'AKIBA.';
       });
       return;
     }
 
+    setState(() {
+      _requestingPermission = true;
+      _permissionNote = null;
+      _permissionNeedsSettings = false;
+    });
+
     bool granted = false;
+    bool deniedForGood = false;
     try {
       switch (kind) {
         case 'notifications':
-          await LocalNotifications.ensureReady(
-            timezone: widget.settings.timezone,
-          );
-          granted = await LocalNotifications.requestPermission();
+          NotificationPermissionState permission = await widget
+              .notificationPermissionGateway
+              .status();
+          if (permission != NotificationPermissionState.granted &&
+              permission != NotificationPermissionState.permanentlyDenied &&
+              permission != NotificationPermissionState.unavailable) {
+            permission = await widget.notificationPermissionGateway.request();
+          }
+          granted = permission == NotificationPermissionState.granted;
+          deniedForGood =
+              permission == NotificationPermissionState.permanentlyDenied;
         case 'sms':
-          granted = (await Permission.sms.request()).isGranted;
+          PermissionStatus status = await Permission.sms.status;
+          if (!status.isGranted) status = await Permission.sms.request();
+          granted = status.isGranted;
+          deniedForGood = status.isPermanentlyDenied;
         case 'micro':
-          granted = (await Permission.microphone.request()).isGranted;
+          PermissionStatus status = await Permission.microphone.status;
+          if (!status.isGranted) status = await Permission.microphone.request();
+          granted = status.isGranted;
+          deniedForGood = status.isPermanentlyDenied;
         case 'wifi':
-          granted =
-              (await Permission.nearbyWifiDevices.request()).isGranted ||
-              (await Permission.locationWhenInUse.request()).isGranted;
+          PermissionStatus status = await Permission.nearbyWifiDevices.status;
+          if (!status.isGranted) {
+            status = await Permission.nearbyWifiDevices.request();
+          }
+          if (!status.isGranted) {
+            PermissionStatus location =
+                await Permission.locationWhenInUse.status;
+            if (!location.isGranted) {
+              location = await Permission.locationWhenInUse.request();
+            }
+            granted = location.isGranted;
+            deniedForGood = location.isPermanentlyDenied;
+          } else {
+            granted = true;
+          }
       }
     } catch (_) {
       granted = false;
@@ -299,22 +402,33 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
 
     if (!mounted) return;
     setState(() {
-      switch (kind) {
-        case 'notifications':
-          _permissionNotifications = granted;
-        case 'sms':
-          _permissionSms = granted;
-        case 'micro':
-          _permissionMicro = granted;
-        case 'wifi':
-          _permissionWifi = granted;
-      }
+      _requestingPermission = false;
+      _setPermission(kind, granted);
+      _permissionNeedsSettings = deniedForGood;
       _permissionNote = granted
           ? null
+          : deniedForGood
+          ? 'Autorisation refusée définitivement : ouvrez les réglages du '
+                'système de notification pour l’accorder à AKIBA.'
           : 'Autorisation refusée par le système : l’interrupteur reste '
-                'désactivé. Vous pouvez la donner plus tard dans les réglages '
-                'Android.';
+                'désactivé. Vous pouvez réessayer ou la donner plus tard dans '
+                'les réglages.';
     });
+    if (kind == 'notifications') {
+      await widget.settings.setFlag('permission_notifications', granted);
+    }
+  }
+
+  Future<void> _openSystemSettings() async {
+    final bool opened = await widget.notificationPermissionGateway
+        .openSettings();
+    if (!opened && mounted) {
+      setState(() {
+        _permissionNote =
+            'Réglages système indisponibles sur cet appareil. Accordez '
+            'l’autorisation depuis les réglages Android d’AKIBA.';
+      });
+    }
   }
 
   Future<void> _loadReserve() async {
@@ -336,6 +450,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _firstName.dispose();
     _lastName.dispose();
     _pin.dispose();
@@ -415,9 +530,25 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
           MediaQuery.maybeOf(context)?.disableAnimations ?? false;
       setState(() => _entering = true);
       if (!reduced) {
-        await Future<void>.delayed(const Duration(milliseconds: 700));
+        await Future<void>.delayed(const Duration(milliseconds: 900));
       }
       await widget.settings.setFlag('onboarding_done', true);
+      // Attendre la livraison avant de quitter l'onboarding : la navigation
+      // peut détruire ce State et annuler un envoi lancé sans await.
+      // Une permission système déjà accordée suffit également, même si le
+      // miroir local n'avait pas encore été synchronisé.
+      try {
+        final NotificationPermissionState permission = await widget
+            .notificationPermissionGateway
+            .status();
+        if (permission == NotificationPermissionState.granted) {
+          await widget.settings.setFlag('permission_notifications', true);
+          await AppNotifications.welcome(widget.settings);
+        }
+      } catch (_) {
+        // L'échec de la notification ne doit jamais bloquer l'entrée dans AKIBA.
+      }
+      if (!mounted) return;
       widget.revision.bump();
       widget.onFinished();
       return;
@@ -428,7 +559,9 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   Future<void> _persistStep() async {
     switch (_step) {
       case 0:
-        await widget.settings.set('language', _language);
+        // `setLanguage` synchronise les globales (traductions, dates) avant de
+        // notifier : l'arbre bascule en anglais sans redémarrage.
+        await widget.settings.setLanguage(_language);
         await widget.settings.setThemeId(_theme);
       case 2:
         await widget.settings.set('first_name', _firstName.text.trim());
@@ -461,7 +594,12 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         }
       case 6:
         if (_pin.text.isNotEmpty) {
-          await PinVault(widget.store).setPin(_pin.text);
+          // Le PIN vit avec les réglages (base réelle), pas avec un magasin de
+          // simulation : sans cela, le verrou ne s'activerait pas.
+          await PinVault(widget.settings.store).setPin(_pin.text);
+          // Relit l'empreinte depuis la base : sans cela, le verrouillage
+          // resterait inactif jusqu'au prochain redémarrage.
+          await widget.settings.load();
         }
         await widget.settings.setFlag('biometrics', _biometrics);
       case 7:
@@ -517,13 +655,12 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
                           children: <Widget>[
                             _Dots(step: _step, total: steps),
                             const SizedBox(height: AkibaSpacing.xl),
-                            AnimatedSwitcher(
-                              duration: AkibaDurations.page,
-                              child: KeyedSubtree(
-                                key: ValueKey<int>(_step),
-                                child: _stepBody(c),
-                              ),
-                            ),
+                            // Pas d'AnimatedSwitcher entre les étapes : le
+                            // corps change d'un bloc, sans laisser l'ancien
+                            // sous-arbre (champs + focus) en transition. C'est
+                            // ce croisement qui provoquait l'assertion Flutter
+                            // à la saisie du premier code PIN.
+                            _stepBody(c),
                             if (_error != null) ...<Widget>[
                               const SizedBox(height: AkibaSpacing.md),
                               Text(
@@ -543,7 +680,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
                                       Icons.arrow_back_rounded,
                                       size: 18,
                                     ),
-                                    label: const Text('Retour'),
+                                    label: Text(AkibaL10n.tr('back_label')),
                                   ),
                                 const Spacer(),
                                 FilledButton.icon(
@@ -556,15 +693,18 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
                                   ),
                                   label: Text(
                                     _step == steps - 1
-                                        ? 'Entrer dans AKIBA'
-                                        : 'Continuer',
+                                        ? AkibaL10n.tr('enter_app')
+                                        : AkibaL10n.tr('continue_label'),
                                   ),
                                 ),
                               ],
                             ),
                             const SizedBox(height: AkibaSpacing.sm),
                             Text(
-                              'Étape ${_step + 1} sur $steps',
+                              AkibaL10n.tr('step_of', <String, String>{
+                                'step': '${_step + 1}',
+                                'total': '$steps',
+                              }),
                               style: AkibaTypography.legend.copyWith(
                                 color: c.textMuted,
                               ),
@@ -677,12 +817,12 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         ),
         const SizedBox(height: AkibaSpacing.xxl),
         Text(
-          'Votre thème',
+          AkibaL10n.tr('theme_heading'),
           style: AkibaTypography.sectionTitle.copyWith(color: c.textPrimary),
         ),
         const SizedBox(height: AkibaSpacing.xs),
         Text(
-          'Il s’applique immédiatement à ce parcours et reste enregistré.',
+          AkibaL10n.tr('theme_immediate'),
           style: AkibaTypography.legend.copyWith(color: c.textMuted),
         ),
         const SizedBox(height: AkibaSpacing.md),
@@ -704,13 +844,12 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         ),
         const SizedBox(height: AkibaSpacing.xl),
         Text(
-          'Votre langue',
+          AkibaL10n.tr('language_heading'),
           style: AkibaTypography.sectionTitle.copyWith(color: c.textPrimary),
         ),
         const SizedBox(height: AkibaSpacing.xs),
         Text(
-          'La langue choisie s’applique à la navigation et aux actions de '
-          'l’accueil. Les écrans détaillés restent en français.',
+          AkibaL10n.tr('language_immediate'),
           style: AkibaTypography.legend.copyWith(color: c.textMuted),
         ),
         const SizedBox(height: AkibaSpacing.sm),
@@ -725,7 +864,13 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
               ChoiceChip(
                 label: Text(label),
                 selected: _language == key,
-                onSelected: (_) => setState(() => _language = key),
+                onSelected: (_) async {
+                  setState(() => _language = key);
+                  // Applique immédiatement (persistance + notification de
+                  // l'arbre) : la suite du parcours et la navigation passent
+                  // en anglais dès cette frame.
+                  await widget.settings.setLanguage(key);
+                },
               ),
           ],
         ),
@@ -838,6 +983,29 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   }
 
   Widget _currencyStep(AkibaColors c) {
+    // La valeur enregistrée peut venir d'une version antérieure ou d'une
+    // restauration : on l'ajoute à la liste au lieu de faire tomber
+    // l'assertion « exactly one item with DropdownButton's value ».
+    final List<String> zones = <String>[
+      'Africa/Lome',
+      'Africa/Cotonou',
+      'Africa/Abidjan',
+      'Africa/Dakar',
+      'Europe/Paris',
+      if (!const <String>[
+        'Africa/Lome',
+        'Africa/Cotonou',
+        'Africa/Abidjan',
+        'Africa/Dakar',
+        'Europe/Paris',
+      ].contains(_timezone))
+        _timezone,
+    ];
+    final String dateStyle =
+        const <String>['jj/mm/aaaa', 'aaaa-mm-jj'].contains(_dateStyle)
+        ? _dateStyle
+        : 'jj/mm/aaaa';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -863,28 +1031,11 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         const SizedBox(height: AkibaSpacing.lg),
         DropdownButtonFormField<String>(
           initialValue: _timezone,
+          isExpanded: true,
           decoration: _field(c, 'Fuseau horaire'),
-          items: const <DropdownMenuItem<String>>[
-            DropdownMenuItem<String>(
-              value: 'Africa/Lome',
-              child: Text('Africa/Lome (GMT)'),
-            ),
-            DropdownMenuItem<String>(
-              value: 'Africa/Cotonou',
-              child: Text('Africa/Cotonou (GMT+1)'),
-            ),
-            DropdownMenuItem<String>(
-              value: 'Africa/Abidjan',
-              child: Text('Africa/Abidjan (GMT)'),
-            ),
-            DropdownMenuItem<String>(
-              value: 'Africa/Dakar',
-              child: Text('Africa/Dakar (GMT)'),
-            ),
-            DropdownMenuItem<String>(
-              value: 'Europe/Paris',
-              child: Text('Europe/Paris'),
-            ),
+          items: <DropdownMenuItem<String>>[
+            for (final String zone in zones)
+              DropdownMenuItem<String>(value: zone, child: Text(zone)),
           ],
           onChanged: (String? value) {
             if (value != null) setState(() => _timezone = value);
@@ -892,7 +1043,8 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         ),
         const SizedBox(height: AkibaSpacing.md),
         DropdownButtonFormField<String>(
-          initialValue: _dateStyle,
+          initialValue: dateStyle,
+          isExpanded: true,
           decoration: _field(c, 'Format des dates'),
           items: const <DropdownMenuItem<String>>[
             DropdownMenuItem<String>(
@@ -1080,9 +1232,9 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
               Text(
                 _googleEmail != null
                     ? 'AKIBA a vérifié votre espace applicatif Drive.'
-                    : GoogleOAuthConfig.isConfigured
-                    ? 'La connexion ouvre le navigateur, puis AKIBA vérifie '
-                          'automatiquement s’il existe une sauvegarde.'
+                    : GoogleOAuthConfig.canSignIn
+                    ? 'La connexion vérifie ensuite automatiquement s’il '
+                          'existe une sauvegarde.'
                     : 'Les identifiants OAuth ne sont pas renseignés : vous '
                           'pouvez continuer hors ligne et connecter Google '
                           'plus tard depuis le Profil.',
@@ -1091,8 +1243,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
                   height: 1.45,
                 ),
               ),
-              if (GoogleOAuthConfig.isConfigured &&
-                  _googleEmail == null) ...<Widget>[
+              if (_googleEmail == null) ...<Widget>[
                 const SizedBox(height: AkibaSpacing.md),
                 FilledButton.icon(
                   onPressed: _saving ? null : _connectGoogle,
@@ -1192,6 +1343,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
           detail:
               'Notifications locales, sans montant si le masquage est actif.',
           value: _permissionNotifications,
+          busy: _requestingPermission,
           onChanged: (bool v) => _requestPermission('notifications', v),
         ),
         _permissionSwitch(
@@ -1227,7 +1379,20 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
           const SizedBox(height: AkibaSpacing.sm),
           Text(
             _permissionNote!,
-            style: AkibaTypography.legend.copyWith(color: c.danger),
+            style: AkibaTypography.legend.copyWith(
+              color: _permissionNeedsSettings ? c.danger : c.warning,
+            ),
+          ),
+        ],
+        if (_permissionNeedsSettings) ...<Widget>[
+          const SizedBox(height: AkibaSpacing.xs),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _openSystemSettings,
+              icon: const Icon(Icons.settings_rounded, size: 18),
+              label: const Text('Ouvrir les réglages de notification'),
+            ),
           ),
         ],
       ],
@@ -1240,11 +1405,12 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     required String detail,
     required bool value,
     required ValueChanged<bool> onChanged,
+    bool busy = false,
   }) {
     return SwitchListTile(
       contentPadding: EdgeInsets.zero,
       value: value,
-      onChanged: onChanged,
+      onChanged: busy ? null : onChanged,
       title: Text(title, style: TextStyle(fontSize: 14, color: c.textPrimary)),
       subtitle: Text(
         detail,
@@ -1293,7 +1459,10 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
             FilteringTextInputFormatter.digitsOnly,
             LengthLimitingTextInputFormatter(9),
           ],
-          decoration: _field(c, 'Réserve de sécurité en FCFA (facultatif)'),
+          decoration: _field(
+            c,
+            'Réserve de sécurité en ${_currency.symbol} (facultatif)',
+          ),
         ),
       ],
     );
@@ -1370,12 +1539,15 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
             child: AnimatedScale(
               // Au clic sur « Entrer dans AKIBA », le logo grandit et laisse
               // place à l'accueil (transition fluide).
-              scale: _entering ? 1.35 : 1,
-              duration: const Duration(milliseconds: 600),
-              curve: Curves.easeOutCubic,
+              // Le logo zoome jusqu'à couvrir l'écran puis s'efface : la
+              // transition vers l'Accueil se fait sans coupure.
+              scale: _entering ? 12 : 1,
+              duration: const Duration(milliseconds: 800),
+              curve: Curves.easeInCubic,
               child: AnimatedOpacity(
-                opacity: _entering ? 0.2 : 1,
-                duration: const Duration(milliseconds: 600),
+                opacity: _entering ? 0 : 1,
+                duration: const Duration(milliseconds: 800),
+                curve: Curves.easeIn,
                 child: Container(
                   width: 116,
                   height: 116,
@@ -1419,7 +1591,8 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         const SizedBox(height: AkibaSpacing.sm),
         Text(
           '${_firstName.text.trim().isEmpty ? 'Votre espace' : _firstName.text.trim()} est prêt : '
-          '${_openingsTotalLabel()} de départ, devise $_currency, fuseau $_timezone.',
+          '${_openingsTotalLabel()} de départ, devise ${_currency.label}, '
+          'fuseau $_timezone.',
           textAlign: TextAlign.center,
           style: AkibaTypography.body.copyWith(color: c.textMuted, height: 1.5),
         ),

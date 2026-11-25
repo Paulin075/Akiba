@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'ai_model_catalog.dart';
+import 'ai_provider.dart';
 
 /// Nature de la tâche : elle fixe le délai maximal de réponse.
 ///
@@ -238,65 +239,84 @@ class AkibaAiClient {
   }
 }
 
-/// Transport réel vers l'API Google Generative Language.
+/// Requête prête à envoyer : URI, en-têtes et corps JSON.
 ///
-/// La clé n'est jamais journalisée ; l'URL complète non plus (elle la contient).
-class GeminiTransport {
-  GeminiTransport({required this.apiKey});
+/// Séparer la construction de l'envoi permet de vérifier le routage par
+/// fournisseur (Gemini natif ou `/chat/completions`) sans aucun réseau.
+class AiProviderCall {
+  const AiProviderCall({
+    required this.uri,
+    required this.headers,
+    required this.body,
+  });
 
-  final String apiKey;
+  final Uri uri;
+  final Map<String, String> headers;
+  final String body;
+}
 
-  static const String base = 'https://generativelanguage.googleapis.com/v1beta';
+/// Construit l'appel du fournisseur, sans jamais journaliser la clé.
+AiProviderCall buildAiProviderCall({
+  required AiProvider provider,
+  required String baseUrl,
+  String? apiKey,
+  required String modelId,
+  required String prompt,
+}) {
+  final String base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+  final Map<String, String> headers = <String, String>{
+    'Content-Type': 'application/json',
+  };
 
-  Future<String> call({
-    required String modelId,
-    required String prompt,
-    required Duration timeout,
-  }) async {
-    final HttpClient client = HttpClient()..connectionTimeout = timeout;
-    try {
-      final Uri uri = Uri.parse(
-        '$base/models/$modelId:generateContent',
-      ).replace(queryParameters: <String, String>{'key': apiKey});
-      final HttpClientRequest request = await client
-          .postUrl(uri)
-          .timeout(timeout);
-      request.headers.contentType = ContentType.json;
-      request.write(
-        jsonEncode(<String, Object?>{
-          'contents': <Object?>[
-            <String, Object?>{
-              'role': 'user',
-              'parts': <Object?>[
-                <String, Object?>{'text': prompt},
-              ],
-            },
-          ],
-          'generationConfig': <String, Object?>{
-            'temperature': 0.2,
-            'responseMimeType': 'application/json',
-          },
-        }),
-      );
-      final HttpClientResponse response = await request.close().timeout(
-        timeout,
-      );
-      final String body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(timeout);
-      if (response.statusCode != 200) {
-        throw AiHttpException(response.statusCode);
-      }
-      return _extractText(body);
-    } finally {
-      client.close(force: true);
+  if (provider.isGemini) {
+    Uri uri = Uri.parse('$base/models/$modelId:generateContent');
+    if (apiKey != null && apiKey.isNotEmpty) {
+      uri = uri.replace(queryParameters: <String, String>{'key': apiKey});
     }
+    return AiProviderCall(
+      uri: uri,
+      headers: headers,
+      body: jsonEncode(<String, Object?>{
+        'contents': <Object?>[
+          <String, Object?>{
+            'role': 'user',
+            'parts': <Object?>[
+              <String, Object?>{'text': prompt},
+            ],
+          },
+        ],
+        'generationConfig': <String, Object?>{
+          'temperature': 0.2,
+          'responseMimeType': 'application/json',
+        },
+      }),
+    );
   }
 
-  static String _extractText(String body) {
-    final Object? decoded = jsonDecode(body);
-    if (decoded is! Map) throw const FormatException('réponse inattendue');
+  // DeepSeek, OpenRouter, Ollama : dialecte OpenAI. Le jeton est facultatif
+  // (une instance locale peut accepter les appels sans authentification).
+  if (apiKey != null && apiKey.isNotEmpty) {
+    headers['Authorization'] = 'Bearer $apiKey';
+  }
+  return AiProviderCall(
+    uri: Uri.parse('$base/chat/completions'),
+    headers: headers,
+    body: jsonEncode(<String, Object?>{
+      'model': modelId,
+      'messages': <Object?>[
+        <String, Object?>{'role': 'user', 'content': prompt},
+      ],
+      'temperature': 0.2,
+      'stream': false,
+    }),
+  );
+}
+
+/// Lit la réponse du fournisseur et n'en garde que le texte.
+String extractAiText(AiProvider provider, String body) {
+  final Object? decoded = jsonDecode(body);
+  if (decoded is! Map) throw const FormatException('réponse inattendue');
+  if (provider.isGemini) {
     final Object? candidates = decoded['candidates'];
     if (candidates is! List || candidates.isEmpty) {
       throw const FormatException('aucune réponse');
@@ -313,9 +333,123 @@ class GeminiTransport {
         buffer.write(part['text'] as String);
       }
     }
-    final String text = buffer.toString().trim();
-    if (text.isEmpty) throw const FormatException('texte vide');
-    return text;
+    return _requireText(buffer.toString());
+  }
+
+  final Object? choices = decoded['choices'];
+  if (choices is! List || choices.isEmpty) {
+    throw const FormatException('aucun choix');
+  }
+  final Object? first = choices.first;
+  if (first is! Map) throw const FormatException('choix illisible');
+  final Object? message = first['message'];
+  if (message is Map) {
+    final Object? content = message['content'];
+    if (content is String) return _requireText(content);
+    if (content is List) {
+      final StringBuffer buffer = StringBuffer();
+      for (final Object? part in content) {
+        if (part is Map && part['text'] is String) {
+          buffer.write(part['text'] as String);
+        }
+      }
+      return _requireText(buffer.toString());
+    }
+  }
+  final Object? legacy = first['text'];
+  if (legacy is String) return _requireText(legacy);
+  throw const FormatException('contenu absent');
+}
+
+String _requireText(String raw) {
+  final String text = raw.trim();
+  if (text.isEmpty) throw const FormatException('texte vide');
+  return text;
+}
+
+/// Envoi réel vers Gemini (API native).
+///
+/// La clé n'est jamais journalisée ; l'URL complète non plus (elle la contient).
+class GeminiTransport {
+  GeminiTransport({required this.apiKey});
+
+  final String apiKey;
+
+  static const String base = 'https://generativelanguage.googleapis.com/v1beta';
+
+  Future<String> call({
+    required String modelId,
+    required String prompt,
+    required Duration timeout,
+  }) => _send(
+    provider: AiProvider.gemini,
+    baseUrl: base,
+    apiKey: apiKey,
+    modelId: modelId,
+    prompt: prompt,
+    timeout: timeout,
+  );
+}
+
+/// Envoi réel vers une API compatible OpenAI (`/v1/chat/completions`).
+class OpenAiCompatibleTransport {
+  OpenAiCompatibleTransport({
+    required this.provider,
+    required this.baseUrl,
+    this.apiKey,
+  });
+
+  final AiProvider provider;
+  final String baseUrl;
+  final String? apiKey;
+
+  Future<String> call({
+    required String modelId,
+    required String prompt,
+    required Duration timeout,
+  }) => _send(
+    provider: provider,
+    baseUrl: baseUrl,
+    apiKey: apiKey,
+    modelId: modelId,
+    prompt: prompt,
+    timeout: timeout,
+  );
+}
+
+Future<String> _send({
+  required AiProvider provider,
+  required String baseUrl,
+  required String? apiKey,
+  required String modelId,
+  required String prompt,
+  required Duration timeout,
+}) async {
+  final AiProviderCall call = buildAiProviderCall(
+    provider: provider,
+    baseUrl: baseUrl,
+    apiKey: apiKey,
+    modelId: modelId,
+    prompt: prompt,
+  );
+  final HttpClient client = HttpClient()..connectionTimeout = timeout;
+  try {
+    final HttpClientRequest request = await client
+        .postUrl(call.uri)
+        .timeout(timeout);
+    call.headers.forEach(request.headers.set);
+    request.write(call.body);
+    final HttpClientResponse response = await request.close().timeout(timeout);
+    final String body = await response
+        .transform(utf8.decoder)
+        .join()
+        .timeout(timeout);
+    if (response.statusCode != 200) {
+      throw AiHttpException(response.statusCode);
+    }
+    return extractAiText(provider, body);
+  } finally {
+    client.close(force: true);
   }
 }
 
@@ -337,20 +471,31 @@ class AiModelsFetch {
   }
 }
 
-/// Récupère les modèles autorisés par la clé (`models.list`).
+/// Récupère les modèles proposés par le fournisseur (`models.list`).
 ///
-/// En cas d'échec, la liste en cache reste utilisée : l'assistant continue de
-/// fonctionner avec les modèles connus.
-Future<AiModelsFetch> fetchAiModels(
-  String apiKey, {
+/// Gemini répond `{models: […]}` ; les API compatibles OpenAI répondent
+/// `{data: [{id: …}]}`. En cas d'échec, la liste en cache reste utilisée.
+Future<AiModelsFetch> fetchAiModels({
+  required AiProvider provider,
+  required String baseUrl,
+  String? apiKey,
   Duration timeout = const Duration(seconds: 8),
 }) async {
+  final String base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
   final HttpClient client = HttpClient()..connectionTimeout = timeout;
   try {
-    final Uri uri = Uri.parse('${GeminiTransport.base}/models').replace(
-      queryParameters: <String, String>{'key': apiKey, 'pageSize': '50'},
-    );
+    Uri uri = Uri.parse('$base/models');
+    if (provider.isGemini && apiKey != null && apiKey.isNotEmpty) {
+      uri = uri.replace(
+        queryParameters: <String, String>{'key': apiKey, 'pageSize': '50'},
+      );
+    }
     final HttpClientRequest request = await client.getUrl(uri).timeout(timeout);
+    if (provider.isGemini) {
+      // Gemini authentifie par le paramètre `key`, déjà dans l'URI.
+    } else if (apiKey != null && apiKey.isNotEmpty) {
+      request.headers.set('Authorization', 'Bearer $apiKey');
+    }
     final HttpClientResponse response = await request.close().timeout(timeout);
     final String body = await response
         .transform(utf8.decoder)
@@ -359,7 +504,9 @@ Future<AiModelsFetch> fetchAiModels(
     if (response.statusCode != 200) {
       return AiModelsFetch(failure: AiHttpException(response.statusCode).kind);
     }
-    final List<AiModel> models = AiModelCatalog.parseList(body);
+    final List<AiModel> models = provider.isGemini
+        ? AiModelCatalog.parseList(body)
+        : AiModelCatalog.parseOpenAiList(body);
     return AiModelsFetch(
       models: models,
       failure: models.isEmpty ? AiFailureKind.invalidResponse : null,

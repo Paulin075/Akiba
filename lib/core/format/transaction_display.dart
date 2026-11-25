@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../data/models/transaction_record.dart';
+import '../state/akiba_l10n.dart';
 import '../theme/akiba_colors.dart';
 import 'akiba_date.dart';
 import 'label_icons.dart';
@@ -34,7 +35,7 @@ abstract final class TransactionDisplay {
   }
 
   static String titleFor(TransactionRecord record) {
-    if (record.isNeutral) return 'Argent de tiers';
+    if (record.isNeutral) return AkibaL10n.tr('third_party_money');
     if (record.note != null && record.note!.trim().isNotEmpty) {
       return record.note!;
     }
@@ -42,11 +43,11 @@ abstract final class TransactionDisplay {
       return record.category!;
     }
     return switch (record.kind) {
-      TransactionKind.income => 'Entrée',
-      TransactionKind.expense => 'Sortie',
-      TransactionKind.transfer => 'Transfert',
-      TransactionKind.savings => 'Épargne',
-      TransactionKind.opening => 'Solde de départ',
+      TransactionKind.income => AkibaL10n.tr('entry'),
+      TransactionKind.expense => AkibaL10n.tr('expense'),
+      TransactionKind.transfer => AkibaL10n.tr('transfer'),
+      TransactionKind.savings => AkibaL10n.tr('savings'),
+      TransactionKind.opening => AkibaL10n.tr('opening_balance'),
     };
   }
 

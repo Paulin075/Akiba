@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../state/akiba_l10n.dart';
 import '../theme/akiba_colors.dart';
 import '../theme/akiba_tokens.dart';
 
@@ -32,8 +33,8 @@ class AkibaSideActions extends StatelessWidget {
           size: AkibaSizes.sideAiButton,
           background: c.terracotta,
           foreground: c.onTerracotta,
-          tooltip: 'Assistant IA',
-          semanticLabel: 'Assistant IA',
+          tooltip: AkibaL10n.tr('ai_assistant'),
+          semanticLabel: AkibaL10n.tr('ai_assistant'),
           onTap: onAssistant,
           child: const Icon(Icons.auto_awesome_rounded, size: 20),
         ),
@@ -56,9 +57,9 @@ class _PigAction extends StatelessWidget {
 
     return Semantics(
       button: true,
-      label: 'Ajout rapide. Toucher pour ajouter, maintenir pour parler.',
+      label: AkibaL10n.tr('pig_semantics'),
       child: Tooltip(
-        message: 'Ajout rapide',
+        message: AkibaL10n.tr('quick_add'),
         child: Container(
           width: AkibaSizes.pigButton,
           height: AkibaSizes.pigButton,

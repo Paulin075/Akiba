@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -8,9 +9,9 @@ import 'package:speech_to_text/speech_to_text.dart';
 
 import '../../core/ai/ai_client.dart';
 import '../../core/ai/ai_command_parser.dart';
-import '../../core/ai/ai_key_vault.dart';
-import '../../core/ai/ai_model_catalog.dart';
 import '../../core/ai/ai_quota.dart';
+import '../../core/ai/ai_remote.dart';
+import '../../core/savings/savings_messages.dart';
 import '../../core/state/akiba_settings.dart';
 import '../../core/format/akiba_money.dart';
 import '../../core/state/akiba_data_revision.dart';
@@ -18,6 +19,7 @@ import '../../core/theme/akiba_colors.dart';
 import '../../core/theme/akiba_tokens.dart';
 import '../../core/theme/akiba_typography.dart';
 import '../../core/widgets/segmented_control.dart';
+import '../../core/widgets/savings_celebration.dart';
 import '../../data/akiba_store.dart';
 import '../../data/models/account.dart';
 import '../../data/models/debt.dart';
@@ -97,6 +99,18 @@ class _AssistantSheetState extends State<_AssistantSheet> {
   AiDraft? _draft;
   TransactionKind _kind = TransactionKind.expense;
   bool _neutral = false;
+
+  /// « owedToMe » / « iOwe » quand la phrase décrit une créance ou une dette.
+  /// Dans ce cas, aucune sortie d'argent n'est écrite : la créance ou la
+  /// dette est suivie séparément du solde disponible.
+  String? _debtDirection;
+
+  /// Créances / dettes ouvertes (pour proposer le règlement d'une ligne
+  /// existante au lieu d'en créer une nouvelle).
+  List<Debt> _debts = const <Debt>[];
+  bool _settleMode = false;
+  String? _debtId;
+
   bool _listening = false;
   bool _analysing = false;
   final SpeechToText _speech = SpeechToText();
@@ -112,6 +126,49 @@ class _AssistantSheetState extends State<_AssistantSheet> {
         _loaded = accounts;
         _accountId = accounts.isEmpty ? null : accounts.first.id;
       });
+    });
+    widget.store
+        .debts()
+        .then((List<Debt> debts) {
+          if (!mounted) return;
+          setState(() {
+            _debts = debts.where((Debt d) => !d.isSettled).toList();
+          });
+        })
+        .catchError((Object _) {});
+  }
+
+  /// Créances ou dettes ouvertes du même sens que la phrase.
+  List<Debt> get _matchingDebts => <Debt>[
+    for (final Debt debt in _debts)
+      if (!debt.isSettled && debt.direction.name == _debtDirection) debt,
+  ];
+
+  Debt? get _selectedDebt {
+    for (final Debt debt in _matchingDebts) {
+      if (debt.id == _debtId) return debt;
+    }
+    return null;
+  }
+
+  /// Bascule entre « nouvelle créance/dette » et « règlement d'une ligne
+  /// existante ». En mode règlement, le montant et le contact sont préremplis
+  /// depuis la première ligne ouverte du même sens.
+  void _toggleSettle() {
+    setState(() {
+      _settleMode = !_settleMode;
+      _message = null;
+      if (_settleMode) {
+        final List<Debt> open = _matchingDebts;
+        if (open.isNotEmpty) {
+          final Debt debt = open.first;
+          _debtId = debt.id;
+          _amount.text = '${debt.remaining}';
+          _note.text = debt.counterparty;
+        } else {
+          _debtId = null;
+        }
+      }
     });
   }
 
@@ -131,8 +188,16 @@ class _AssistantSheetState extends State<_AssistantSheet> {
       setState(() {
         _message =
             'Je n’ai pas trouvé de montant. Exemple : '
-            '« j’ai payé 5 000 pour le transport ».';
+            '« j’ai payé 5 000 pour le transport » ou '
+            '« Koffi me doit 5 000 ».';
       });
+      return;
+    }
+
+    // Créance / dette : le sens est déjà déterminé par la phrase, aucun
+    // modèle ne peut le contredire. On applique la lecture locale.
+    if (local.debtDirection != null) {
+      _applyDraft(local, 'Analyse locale · créance / dette');
       return;
     }
 
@@ -151,10 +216,17 @@ class _AssistantSheetState extends State<_AssistantSheet> {
       _message = null;
     });
     try {
-      final String? key = await AiKeyVault(widget.settings).read();
+      // Fournisseur choisi (Gemini, DeepSeek, OpenRouter, Home Lab / Ollama) :
+      // masquage, appels distants coupés, adresse invalide ou clé absente
+      // renvoient directement au moteur local.
+      final AiRemoteResolution resolution = await resolveAiRemote(
+        widget.settings,
+        masked: widget.masked,
+      );
       if (!mounted) return;
-      if (key == null) {
-        _applyDraft(local, 'Analyse locale · clé absente');
+      final AiRemoteSetup? setup = resolution.setup;
+      if (setup == null) {
+        _applyDraft(local, resolution.note);
         return;
       }
       // Quota journalier : une analyse distante = une unité, cascade comprise.
@@ -164,13 +236,9 @@ class _AssistantSheetState extends State<_AssistantSheet> {
         _applyDraft(local, 'Analyse locale · quota du jour atteint');
         return;
       }
-      final List<AiModel> models = AiModelCatalog.selected(
-        AiModelCatalog.decode(widget.settings.raw('ai_models_cache')),
-        widget.settings.raw('ai_model_priority'),
-      );
       final AkibaAiClient client = AkibaAiClient(
-        models: models,
-        transport: GeminiTransport(apiKey: key).call,
+        models: setup.models,
+        transport: setup.transport,
         maxAttempts: widget.settings.aiMaxAttempts,
       );
       final AiCallResult result = await client.generate(
@@ -187,7 +255,7 @@ class _AssistantSheetState extends State<_AssistantSheet> {
         remote ?? local,
         remote == null
             ? 'Analyse locale · réponse du modèle illisible'
-            : 'Modèle : ${result.modelId}',
+            : '${setup.provider.label} · ${result.modelId}',
       );
     } finally {
       if (mounted) setState(() => _analysing = false);
@@ -200,8 +268,17 @@ class _AssistantSheetState extends State<_AssistantSheet> {
       _draft = draft;
       _kind = draft.kind;
       _amount.text = '${draft.amount}';
-      _note.text = draft.note ?? _text.text;
+      // Créance / dette : le champ devient le contact. « On me doit 12 000 »
+      // ne doit pas enregistrer toute la phrase comme nom de contact.
+      _note.text = draft.debtDirection != null
+          ? (draft.counterparty ?? '')
+          : (draft.note ?? _text.text);
       _neutral = draft.isNeutral;
+      _debtDirection = draft.debtDirection;
+      if (draft.debtDirection == null) {
+        _settleMode = false;
+        _debtId = null;
+      }
       if (draft.category != null &&
           (_kind == TransactionKind.income
                   ? _incomeCategories
@@ -284,14 +361,20 @@ class _AssistantSheetState extends State<_AssistantSheet> {
       setState(() => _message = 'Montant invalide (1 à 999 999 999 FCFA).');
       return;
     }
-    if (_accountId == null) {
-      setState(() => _message = 'Aucun compte disponible.');
+    final AiDraft? draft = _draft;
+    final String? debt = _debtDirection ?? draft?.debtDirection;
+    // Créance / dette : soit un règlement (mouvement de trésorerie sur le
+    // compte choisi), soit une nouvelle ligne suivie hors solde.
+    if (debt != null) {
+      if (_settleMode) {
+        await _saveSettlement(amount, debt);
+      } else {
+        await _saveDebt(amount, debt, draft?.counterparty);
+      }
       return;
     }
-
-    final AiDraft? draft = _draft;
-    if (draft?.debtDirection != null) {
-      await _saveDebt(amount, draft!.debtDirection!);
+    if (_accountId == null) {
+      setState(() => _message = 'Aucun compte disponible.');
       return;
     }
     if (draft?.isSavings ?? false) {
@@ -318,9 +401,14 @@ class _AssistantSheetState extends State<_AssistantSheet> {
       await widget.store.saveTransaction(record);
       widget.revision.bump();
       if (!mounted) return;
-      Navigator.of(context).pop();
+      // Le contexte de la feuille est désactivé dès `pop()` : on garde le
+      // navigateur et le messager avant, sinon l'assertion « descendant » de
+      // Flutter tombe à la fermeture de l'assistant.
+      final NavigatorState navigator = Navigator.of(context);
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      navigator.pop();
       HapticFeedback.lightImpact();
-      ScaffoldMessenger.of(context)
+      messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(
           const SnackBar(
@@ -329,15 +417,77 @@ class _AssistantSheetState extends State<_AssistantSheet> {
           ),
         );
     } catch (_) {
-      setState(() => _message = 'Enregistrement impossible.');
+      if (mounted) setState(() => _message = 'Enregistrement impossible.');
     }
   }
 
-  Future<void> _saveDebt(int amount, String direction) async {
+  /// Règlement d'une créance (« on me doit ») ou d'une dette (« je dois »).
+  ///
+  /// L'argent bouge réellement sur le compte choisi : une créance encaissée
+  /// augmente le solde disponible, une dette payée le diminue. Le reste dû est
+  /// mis à jour dans la même écriture.
+  Future<void> _saveSettlement(int amount, String direction) async {
+    final Debt? debt = _selectedDebt;
+    if (debt == null) {
+      setState(() {
+        _message =
+            'Aucune ${direction == 'owedToMe' ? 'créance' : 'dette'} ouverte '
+            'sélectionnée. Enregistrez-la d’abord, puis revenez la régler.';
+      });
+      return;
+    }
+    final String? accountId = _accountId;
+    if (accountId == null) {
+      setState(() => _message = 'Choisissez le compte concerné.');
+      return;
+    }
+    final bool received = direction == 'owedToMe';
+    try {
+      await widget.store.settleDebt(debt, amount: amount, accountId: accountId);
+      widget.revision.bump();
+      if (!mounted) return;
+      final NavigatorState navigator = Navigator.of(context);
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      navigator.pop();
+      HapticFeedback.lightImpact();
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              received
+                  ? 'Créance encaissée : le montant a été ajouté au compte '
+                        'choisi.'
+                  : 'Dette payée : le montant a été retiré du compte choisi.',
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+    } on StateError catch (error) {
+      if (mounted) setState(() => _message = error.message);
+    } catch (_) {
+      if (mounted) setState(() => _message = 'Règlement impossible.');
+    }
+  }
+
+  Future<void> _saveDebt(
+    int amount,
+    String direction,
+    String? extracted,
+  ) async {
     final DateTime now = DateTime.now();
-    final String counterparty = _note.text.trim().isEmpty
-        ? 'Contact'
-        : _note.text.trim();
+    // Contact : le nom extrait de la phrase, sinon ce qui a été saisi dans le
+    // champ (nettoyé des chiffres). Une phrase entière ne devient jamais un
+    // nom : on retombe sur « Contact », que l'utilisateur peut corriger.
+    final String typed = _note.text
+        .replaceAll(RegExp(r"[\d\s.,;:!?()'’]+"), ' ')
+        .trim();
+    final bool typedLooksLikeName =
+        typed.isNotEmpty && typed.split(RegExp(r'\s+')).length <= 3;
+    final String counterparty =
+        (extracted != null && extracted.trim().isNotEmpty)
+        ? extracted.trim()
+        : (typedLooksLikeName ? typed : 'Contact');
     try {
       await widget.store.saveDebt(
         Debt(
@@ -353,21 +503,25 @@ class _AssistantSheetState extends State<_AssistantSheet> {
       );
       widget.revision.bump();
       if (!mounted) return;
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context)
+      final NavigatorState navigator = Navigator.of(context);
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      navigator.pop();
+      messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
             content: Text(
               direction == 'owedToMe'
-                  ? 'Créance enregistrée : elle reste hors du solde disponible.'
-                  : 'Dette enregistrée : elle reste hors du solde disponible.',
+                  ? 'Créance enregistrée : elle reste hors du solde disponible '
+                        'jusqu’à l’encaissement.'
+                  : 'Dette enregistrée : elle reste hors du solde disponible '
+                        'jusqu’au paiement.',
             ),
             duration: const Duration(seconds: 3),
           ),
         );
     } catch (_) {
-      setState(() => _message = 'Enregistrement impossible.');
+      if (mounted) setState(() => _message = 'Enregistrement impossible.');
     }
   }
 
@@ -401,20 +555,44 @@ class _AssistantSheetState extends State<_AssistantSheet> {
       );
       widget.revision.bump();
       if (!mounted) return;
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context)
+      // La fête s'affiche sur le navigateur, pas sur le contexte de la feuille
+      // qui vient d'être retirée de l'arbre.
+      final NavigatorState navigator = Navigator.of(context);
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      final String local = SavingsMessages(
+        language: widget.settings.language,
+      ).next(SavingsMessageKind.encouragement, potName: pots.first.name);
+      final Future<String?>? ai = widget.settings.aiRemoteEnabled
+          ? SavingsCoach()
+                .enrich(
+                  settings: widget.settings,
+                  kind: SavingsMessageKind.encouragement,
+                  localMessage: local,
+                  potName: pots.first.name,
+                )
+                .then((SavingsCoachResult r) => r.fromAi ? r.message : null)
+          : null;
+      navigator.pop();
+      await showSavingsCelebration(
+        navigator.context,
+        potName: pots.first.name,
+        message: local,
+        aiMessage: ai,
+      );
+      if (!mounted) return;
+      messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
               'Versement d’épargne enregistré : le solde disponible ne baisse '
-              'pas.',
+              'pas. $local',
             ),
-            duration: Duration(seconds: 3),
+            duration: const Duration(seconds: 4),
           ),
         );
     } catch (_) {
-      setState(() => _message = 'Enregistrement impossible.');
+      if (mounted) setState(() => _message = 'Enregistrement impossible.');
     }
   }
 
@@ -486,6 +664,11 @@ class _AssistantSheetState extends State<_AssistantSheet> {
           _text.text = result.recognizedWords;
           if (result.finalResult) _listening = false;
         });
+        // Dictée terminée : l'analyse part toute seule, sans bouton
+        // « Analyser » à cliquer. L'utilisateur relit puis confirme.
+        if (result.finalResult && result.recognizedWords.trim().isNotEmpty) {
+          unawaited(_analyse());
+        }
       },
     );
   }
@@ -494,6 +677,21 @@ class _AssistantSheetState extends State<_AssistantSheet> {
   Widget build(BuildContext context) {
     final AkibaColors c = AkibaColors.of(context);
     final bool wide = MediaQuery.sizeOf(context).width >= 720;
+
+    // Un modèle distant ou un ancien brouillon peut proposer une catégorie qui
+    // n'existe pas dans la liste courante : on retombe sur la première pour ne
+    // jamais déclencher l'assertion « exactly one item with DropdownButton ».
+    final List<String> categories = _kind == TransactionKind.income
+        ? _incomeCategories
+        : _expenseCategories;
+    final String safeCategory = categories.contains(_category)
+        ? _category
+        : categories.first;
+    final List<Account> accountItems = <Account>[];
+    final Set<String> seenAccounts = <String>{};
+    for (final Account account in _loaded) {
+      if (seenAccounts.add(account.id)) accountItems.add(account);
+    }
 
     return ConstrainedBox(
       constraints: BoxConstraints(
@@ -640,29 +838,151 @@ class _AssistantSheetState extends State<_AssistantSheet> {
                               ],
                             ),
                             const SizedBox(height: AkibaSpacing.md),
-                            SegmentedControl(
-                              segments: const <String>[
-                                'Sortie',
-                                'Entrée',
-                                'Tiers',
+                            if (_debtDirection != null) ...<Widget>[
+                              Container(
+                                padding: const EdgeInsets.all(AkibaSpacing.md),
+                                decoration: BoxDecoration(
+                                  color: c.iconTile,
+                                  borderRadius: BorderRadius.circular(
+                                    AkibaRadii.field,
+                                  ),
+                                ),
+                                child: Row(
+                                  children: <Widget>[
+                                    Icon(
+                                      _debtDirection == 'owedToMe'
+                                          ? Icons.call_received_rounded
+                                          : Icons.call_made_rounded,
+                                      size: 18,
+                                      color: c.terracotta,
+                                    ),
+                                    const SizedBox(width: AkibaSpacing.sm),
+                                    Expanded(
+                                      child: Text(
+                                        _settleMode
+                                            ? (_debtDirection == 'owedToMe'
+                                                  ? 'Règlement · '
+                                                        'l’encaissement entre '
+                                                        'sur le compte choisi '
+                                                        'et augmente le solde '
+                                                        'disponible.'
+                                                  : 'Règlement · le '
+                                                        'paiement sort du '
+                                                        'compte choisi et '
+                                                        'diminue le solde '
+                                                        'disponible.')
+                                            : (_debtDirection == 'owedToMe'
+                                                  ? 'Créance · on me doit. '
+                                                        'Tant qu’elle n’est '
+                                                        'pas encaissée, elle '
+                                                        'reste hors du solde '
+                                                        'disponible.'
+                                                  : 'Dette · je dois. Tant '
+                                                        'qu’elle n’est pas '
+                                                        'payée, elle reste '
+                                                        'hors du solde '
+                                                        'disponible.'),
+                                        style: AkibaTypography.legend.copyWith(
+                                          color: c.textMuted,
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => setState(() {
+                                        _debtDirection = null;
+                                        _settleMode = false;
+                                        _debtId = null;
+                                        _kind = TransactionKind.expense;
+                                      }),
+                                      child: const Text('Changer'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: AkibaSpacing.xs),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: TextButton.icon(
+                                  onPressed: _toggleSettle,
+                                  icon: Icon(
+                                    _settleMode
+                                        ? Icons.close_rounded
+                                        : Icons.task_alt_rounded,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                    _settleMode
+                                        ? 'Annuler le règlement'
+                                        : (_debtDirection == 'owedToMe'
+                                              ? 'Cette créance a été encaissée'
+                                              : 'Cette dette a été payée'),
+                                  ),
+                                ),
+                              ),
+                              if (_settleMode) ...<Widget>[
+                                if (_matchingDebts.isEmpty)
+                                  Text(
+                                    'Aucune ${_debtDirection == 'owedToMe' ? 'créance' : 'dette'} '
+                                    'ouverte pour l’instant : enregistrez-la '
+                                    'd’abord sans règlement.',
+                                    style: AkibaTypography.legend.copyWith(
+                                      color: c.warning,
+                                    ),
+                                  )
+                                else
+                                  DropdownButtonFormField<String>(
+                                    initialValue: _selectedDebt?.id,
+                                    decoration: _field(c, 'Ligne à régler'),
+                                    items: <DropdownMenuItem<String>>[
+                                      for (final Debt item in _matchingDebts)
+                                        DropdownMenuItem<String>(
+                                          value: item.id,
+                                          child: Text(
+                                            '${item.counterparty} · '
+                                            '${AkibaMoney.format(item.remaining, masked: widget.masked)}',
+                                          ),
+                                        ),
+                                    ],
+                                    onChanged: (String? value) {
+                                      if (value == null) return;
+                                      for (final Debt item in _matchingDebts) {
+                                        if (item.id != value) continue;
+                                        setState(() {
+                                          _debtId = item.id;
+                                          _amount.text = '${item.remaining}';
+                                          _note.text = item.counterparty;
+                                        });
+                                      }
+                                    },
+                                  ),
                               ],
-                              selectedIndex: _neutral
-                                  ? 2
-                                  : (_kind == TransactionKind.income ? 1 : 0),
-                              onChanged: (int index) => setState(() {
-                                if (index == 2) {
-                                  _neutral = true;
-                                } else {
-                                  _neutral = false;
-                                  _kind = index == 1
-                                      ? TransactionKind.income
-                                      : TransactionKind.expense;
-                                  _category = _kind == TransactionKind.income
-                                      ? _incomeCategories.first
-                                      : _expenseCategories.first;
-                                }
-                              }),
-                            ),
+                            ],
+                            if (_debtDirection == null)
+                              SegmentedControl(
+                                segments: const <String>[
+                                  'Sortie',
+                                  'Entrée',
+                                  'Tiers',
+                                ],
+                                selectedIndex: _neutral
+                                    ? 2
+                                    : (_kind == TransactionKind.income ? 1 : 0),
+                                onChanged: (int index) => setState(() {
+                                  _debtDirection = null;
+                                  if (index == 2) {
+                                    _neutral = true;
+                                  } else {
+                                    _neutral = false;
+                                    _kind = index == 1
+                                        ? TransactionKind.income
+                                        : TransactionKind.expense;
+                                    _category = _kind == TransactionKind.income
+                                        ? _incomeCategories.first
+                                        : _expenseCategories.first;
+                                  }
+                                }),
+                              ),
                             const SizedBox(height: AkibaSpacing.md),
                             Row(
                               children: <Widget>[
@@ -689,12 +1009,21 @@ class _AssistantSheetState extends State<_AssistantSheet> {
                             const SizedBox(height: AkibaSpacing.md),
                             DropdownButtonFormField<String>(
                               initialValue:
-                                  _loaded.any((Account a) => a.id == _accountId)
+                                  accountItems.any(
+                                    (Account a) => a.id == _accountId,
+                                  )
                                   ? _accountId
                                   : null,
-                              decoration: _field(c, 'Compte'),
+                              decoration: _field(
+                                c,
+                                _debtDirection != null
+                                    ? (_debtDirection == 'owedToMe'
+                                          ? 'Compte qui reçoit'
+                                          : 'Compte qui paie')
+                                    : 'Compte',
+                              ),
                               items: <DropdownMenuItem<String>>[
-                                for (final Account account in _loaded)
+                                for (final Account account in accountItems)
                                   DropdownMenuItem<String>(
                                     value: account.id,
                                     child: Text(
@@ -706,15 +1035,14 @@ class _AssistantSheetState extends State<_AssistantSheet> {
                                   setState(() => _accountId = value),
                             ),
                             const SizedBox(height: AkibaSpacing.md),
-                            if (!_neutral)
+                            if (!_neutral &&
+                                _debtDirection == null &&
+                                _kind != TransactionKind.transfer)
                               DropdownButtonFormField<String>(
-                                initialValue: _category,
+                                initialValue: safeCategory,
                                 decoration: _field(c, 'Catégorie'),
                                 items: <DropdownMenuItem<String>>[
-                                  for (final String category
-                                      in _kind == TransactionKind.income
-                                          ? _incomeCategories
-                                          : _expenseCategories)
+                                  for (final String category in categories)
                                     DropdownMenuItem<String>(
                                       value: category,
                                       child: Text(category),
@@ -729,11 +1057,31 @@ class _AssistantSheetState extends State<_AssistantSheet> {
                             const SizedBox(height: AkibaSpacing.md),
                             TextField(
                               controller: _note,
-                              decoration: _field(c, 'Note'),
+                              decoration: _field(
+                                c,
+                                _debtDirection != null
+                                    ? 'Contact (ex. Koffi)'
+                                    : 'Note',
+                              ),
                             ),
                             const SizedBox(height: AkibaSpacing.md),
                             Text(
-                              _neutral
+                              _debtDirection != null
+                                  ? _settleMode
+                                        ? (_debtDirection == 'owedToMe'
+                                              ? 'Le montant encaissé sera '
+                                                    'ajouté au compte choisi ; '
+                                                    'le reste dû diminue '
+                                                    'd’autant.'
+                                              : 'Le montant payé sera retiré '
+                                                    'du compte choisi ; le '
+                                                    'reste dû diminue d’autant.')
+                                        : 'La créance / dette sera '
+                                              'enregistrée sans mouvement de '
+                                              'trésorerie : elle reste hors '
+                                              'du solde disponible, du budget '
+                                              'et des statistiques.'
+                                  : _neutral
                                   ? 'Argent de tiers : la ligne sera isolée du '
                                         'solde disponible, du budget et des '
                                         'statistiques.'
@@ -748,7 +1096,12 @@ class _AssistantSheetState extends State<_AssistantSheet> {
                             FilledButton.icon(
                               onPressed: _save,
                               icon: const Icon(Icons.check_rounded, size: 18),
-                              label: Text('Confirmer · ${_previewAmount()}'),
+                              label: Text(
+                                _settleMode
+                                    ? 'Confirmer le règlement · '
+                                          '${_previewAmount()}'
+                                    : 'Confirmer · ${_previewAmount()}',
+                              ),
                             ),
                             const SizedBox(height: AkibaSpacing.xs),
                             Text(

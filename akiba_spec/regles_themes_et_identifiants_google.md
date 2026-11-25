@@ -56,21 +56,31 @@ Règles :
    ```json
    {
      "AKIBA_GOOGLE_CLIENT_ID": "…apps.googleusercontent.com",
-     "AKIBA_GOOGLE_CLIENT_SECRET": ""
+     "AKIBA_GOOGLE_CLIENT_SECRET": "",
+     "AKIBA_GOOGLE_ANDROID_SERVER_CLIENT_ID": "…apps.googleusercontent.com"
    }
    ```
 
    Le client AKIBA est de type **Application de bureau** : il n'a pas de
-   secret, la chaîne vide est la valeur correcte.
-3. L'application ne lit l'identifiant que par
-   `String.fromEnvironment('AKIBA_GOOGLE_CLIENT_ID')`, alimenté par
-   `--dart-define-from-file=secrets/google_oauth.json`. Aucune constante
-   d'identifiant n'est écrite dans `lib/`.
-4. Sans fichier de définitions, `GoogleOAuthConfig.isConfigured` est faux :
-   l'application reste **100 % hors ligne** et propose le dossier Drive
+   secret, la chaîne vide est la valeur correcte. La troisième clé est le client
+   **Application Web** (Android uniquement, voir point 7).
+3. L'application lit l'identifiant par `String.fromEnvironment` (essais
+   ponctuels), puis `secrets/google_oauth.json`, puis la copie embarquée
+   `assets/config/google_oauth.json` — écrite **sans commande** par la tâche
+   Gradle `syncOAuthSecrets` avant chaque build Android. La lecture ne modifie
+   jamais ces fichiers. Aucune constante d'identifiant n'est écrite dans `lib/`.
+4. Sans identifiant, `GoogleOAuthConfig.isConfigured` et `isAndroidReady` sont
+   faux : l'application reste **100 % hors ligne** et propose le dossier Drive
    synchronisé. Aucune erreur, aucun écran bloqué.
-5. La sauvegarde déposée sur Drive reste l'enveloppe **AES-256-GCM** existante
+5. Sur Android (Étape 20), la connexion passe par `google_sign_in` : client OAuth
+   **Android** pour `applicationId` `com.akiba.app` + empreinte SHA-1, et client
+   **Application Web** fourni comme `AKIBA_GOOGLE_ANDROID_SERVER_CLIENT_ID`
+   (jamais un secret). Le flux boucle locale + PKCE reste réservé à l'ordinateur.
+   L'empreinte se relève avec `dart run tool/debug_sha1.dart` ; la procédure
+   exacte (projet, consentement, utilisateurs test, deux clients) est dans
+   `akiba_spec/activer_connexion_google_android.md`.
+6. La sauvegarde déposée sur Drive reste l'enveloppe **AES-256-GCM** existante
    (phrase secrète locale, PBKDF2 120 000 tours) dans `appDataFolder` ; Google
    ne reçoit que du chiffré. Les cinq dernières sauvegardes sont conservées.
-6. Aucun jeton n'est écrit dans le code, la base ou les journaux : jeton
+7. Aucun jeton n'est écrit dans le code, la base ou les journaux : jeton
    d'accès en mémoire, jeton de rafraîchissement dans le coffre système.
