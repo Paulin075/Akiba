@@ -14,6 +14,7 @@ import 'package:akiba/core/ai/ai_quota.dart';
 import 'package:akiba/core/format/akiba_currency.dart';
 import 'package:akiba/core/format/akiba_money.dart';
 import 'package:akiba/core/backup/backup_service.dart';
+import 'package:akiba/core/backup/google_account.dart';
 import 'package:akiba/core/config/google_oauth_config.dart';
 import 'package:akiba/core/database/akiba_database.dart';
 import 'package:akiba/core/database/akiba_secure_key.dart';
@@ -664,9 +665,13 @@ void main() {
       'restauration automatique avec le même compte Google sur nouvel appareil',
       () async {
         final BackupService freshDevice = BackupService(store);
+        final GoogleAccount account = GoogleAccount.normalized(
+          id: 'google-sub-stable-123',
+          email: 'Paulin@Gmail.com',
+        );
         final Map<String, dynamic> envelope = await freshDevice.createEnvelope(
           deviceId: 'poste-1',
-          googleAccountId: 'google-sub-stable-123',
+          account: account,
         );
         expect(envelope['kdf'], 'PBKDF2-HMAC-SHA256');
         expect(envelope['salt'], isA<String>());
@@ -676,13 +681,13 @@ void main() {
         final BackupService reinstalled = BackupService(store);
         final Map<String, dynamic> payload = await reinstalled.decryptEnvelope(
           envelope,
-          googleAccountId: 'google-sub-stable-123',
+          account: account,
         );
         expect((payload['transactions'] as List<dynamic>).length, 1);
         expect(
           () => reinstalled.decryptEnvelope(
             envelope,
-            googleAccountId: 'autre-compte',
+            account: GoogleAccount.fromId('autre-compte'),
           ),
           throwsA(isA<BackupException>()),
         );

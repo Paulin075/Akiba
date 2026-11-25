@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 
 import '../../core/backup/backup_progress.dart';
 import '../../core/backup/backup_service.dart';
+import '../../core/backup/google_account.dart';
 import '../../core/backup/google_drive_backup.dart';
+import '../../core/backup/home_lab_setup.dart';
 import '../../core/config/google_oauth_config.dart';
 import '../../core/format/akiba_date.dart';
 import '../../core/state/akiba_data_revision.dart';
@@ -63,9 +65,7 @@ class _BackupSheetState extends State<_BackupSheet> {
   late final TextEditingController _labUrl = TextEditingController(
     text: widget.settings.labUrl,
   );
-  late final TextEditingController _labToken = TextEditingController(
-    text: widget.settings.labToken,
-  );
+  late final TextEditingController _labToken = TextEditingController();
 
   int _target = 0;
   bool _busy = false;
@@ -78,6 +78,10 @@ class _BackupSheetState extends State<_BackupSheet> {
 
   final GoogleDriveService _google = GoogleDriveService();
   String? _googleEmail;
+  late final HomeLabSetup _lab = HomeLabSetup(
+    service: BackupService(widget.store),
+    settings: widget.settings,
+  );
 
   BackupService get _service => BackupService(widget.store);
 
@@ -88,6 +92,13 @@ class _BackupSheetState extends State<_BackupSheet> {
   void initState() {
     super.initState();
     _loadGoogleLink();
+    _loadLabSetup();
+  }
+
+  /// Relit l'adresse enregistrée et l'état du jeton (coffre du système).
+  Future<void> _loadLabSetup() async {
+    await _lab.load();
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadGoogleLink() async {
@@ -148,42 +159,48 @@ class _BackupSheetState extends State<_BackupSheet> {
     }
   }
 
-  /// « Tester la connexion » du Home Lab : lecture seule, sans écriture.
+  /// Étape 1 — « Tester la communication » : lecture seule, **sans jeton**.
   ///
-  /// L'adresse est d'abord normalisée (IP seule, `ip:port`, nom local ou URL
-  /// complète). Une adresse inutilisable est refusée **avant** tout appel
-  /// réseau, avec un exemple concret, au lieu d'une erreur générique.
-  Future<void> _testLab() async {
+  /// L'adresse est normalisée (IP seule, `ip:port`, nom local ou URL), puis
+  /// réellement interrogée ; la latence et un diagnostic précis sont affichés.
+  Future<void> _testLabCommunication() async {
     if (_busy) return;
-    final String? normalized = BackupService.normalizeUrl(_labUrl.text);
-    if (normalized == null) {
-      _show(
-        'Adresse invalide : utilisez par exemple 192.168.1.80:8080 ou '
-        'https://akiba.local/backup.',
-        error: true,
-      );
-      return;
-    }
     setState(() {
       _busy = true;
       _status = null;
       _isError = false;
     });
     try {
-      // L'adresse normalisée est celle qui est enregistrée et testée : la
-      // sauvegarde suivante utilise exactement la même URL.
-      _labUrl.text = normalized;
-      await _persistTargetSettings();
-      final HomeLabProbe probe = await _service.probeRemote(
-        url: normalized,
-        token: _labToken.text,
-      );
+      final HomeLabSetupResult result = await _lab.testAddress(_labUrl.text);
       if (!mounted) return;
-      _show(probe.message, error: !probe.ok);
-    } on BackupException catch (error) {
-      _show(error.message, error: true);
+      if (_lab.url.isNotEmpty) _labUrl.text = _lab.url;
+      _show(result.message, error: !result.ok);
     } catch (error) {
       _show('Test impossible (${error.runtimeType}).', error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Étape 2 — vérifie le jeton, le protège dans le coffre du système, arme la
+  /// sauvegarde automatique et envoie immédiatement une sauvegarde chiffrée.
+  Future<void> _activateLab() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _status = null;
+      _isError = false;
+    });
+    try {
+      final HomeLabSetupResult result = await _lab.activateToken(
+        _labToken.text,
+      );
+      if (!mounted) return;
+      // Le jeton n'est jamais laissé en clair dans un champ après validation.
+      if (result.ok) _labToken.clear();
+      _show(result.message, error: !result.ok);
+    } catch (error) {
+      _show('Activation impossible (${error.runtimeType}).', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -199,8 +216,8 @@ class _BackupSheetState extends State<_BackupSheet> {
 
   Future<void> _persistTargetSettings() async {
     await widget.settings.set('backup_drive_folder', _folder.text.trim());
+    // L'URL seule est persistée ici : le jeton vit dans le coffre du système.
     await widget.settings.set('lab_url', _labUrl.text.trim());
-    await widget.settings.set('lab_token', _labToken.text.trim());
   }
 
   Future<DateTime?> _localLastMutation() async {
@@ -223,7 +240,7 @@ class _BackupSheetState extends State<_BackupSheet> {
     }
     return _service.fetchRemote(
       url: _labUrl.text.trim(),
-      token: _labToken.text,
+      token: await _lab.currentToken(),
       onStage: (BackupStage stage) => _stage.value = stage,
     );
   }
@@ -276,9 +293,12 @@ class _BackupSheetState extends State<_BackupSheet> {
       }
 
       _stage.value = BackupStage.preparing;
+      // Identité Google normalisée : la sauvegarde reste portable et se
+      // rouvre avec le même compte, même si l'e-mail est saisi différemment.
+      final GoogleAccount account = await _google.currentAccount();
       final Map<String, dynamic> envelope = await _service.createEnvelope(
         deviceId: 'akiba-${widget.settings.timezone}',
-        googleAccountId: await _google.currentAccountId(),
+        account: account,
         onStage: (BackupStage stage) => _stage.value = stage,
       );
 
@@ -301,7 +321,7 @@ class _BackupSheetState extends State<_BackupSheet> {
       } else {
         location = await _service.putRemote(
           url: _labUrl.text.trim(),
-          token: _labToken.text,
+          token: await _lab.currentToken(),
           envelope: envelope,
           onStage: (BackupStage stage) => _stage.value = stage,
         );
@@ -399,7 +419,7 @@ class _BackupSheetState extends State<_BackupSheet> {
       _stage.value = BackupStage.decrypting;
       final Map<String, int> restored = await _service.restore(
         remote,
-        googleAccountId: await _google.currentAccountId(),
+        account: await _google.currentAccount(),
         onStage: (BackupStage stage) => _stage.value = stage,
       );
       widget.revision.bump();
@@ -585,6 +605,28 @@ class _BackupSheetState extends State<_BackupSheet> {
                         ),
                       ),
                     ] else ...<Widget>[
+                      Row(
+                        children: <Widget>[
+                          _stepBadge(c, 1, 'Adresse'),
+                          const SizedBox(width: AkibaSpacing.sm),
+                          _stepBadge(
+                            c,
+                            2,
+                            'Jeton & sauvegarde auto',
+                            active: _lab.tokenStepUnlocked,
+                            done: _lab.tokenSaved,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: AkibaSpacing.md),
+                      Text(
+                        'ÉTAPE 1 · ADRESSE DU SERVEUR',
+                        style: AkibaTypography.label.copyWith(
+                          color: c.textMuted,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: AkibaSpacing.sm),
                       TextField(
                         controller: _labUrl,
                         keyboardType: TextInputType.url,
@@ -592,54 +634,40 @@ class _BackupSheetState extends State<_BackupSheet> {
                         enableSuggestions: false,
                         decoration: _field(
                           c,
-                          'Serveur Home Lab (192.168.1.80:8080 ou https://…)',
+                          'IP, IP:port ou URL (192.168.1.80:8080)',
                         ),
                       ),
                       const SizedBox(height: AkibaSpacing.sm),
-                      TextField(
-                        controller: _labToken,
-                        obscureText: true,
-                        decoration: _field(c, 'Jeton d’accès (facultatif)'),
-                      ),
-                      const SizedBox(height: AkibaSpacing.sm),
-                      Text(
-                        'Home Lab seulement : même Wi-Fi, sans VPN. Le jeton '
-                        'est envoyé en en-tête Bearer et jamais dans l’URL. '
-                        'Une IP seule ou « IP:port » suffit : http:// est ajouté '
-                        'automatiquement. « Tester la connexion » lit la '
-                        'sauvegarde sans rien écrire.',
-                        style: AkibaTypography.legend.copyWith(
-                          color: c.textMuted,
-                          height: 1.45,
-                        ),
-                      ),
-                      const SizedBox(height: AkibaSpacing.sm),
-                      // Actif dès que l'adresse du serveur est saisie.
+                      // Étape 1 : joignabilité réelle, sans jeton.
                       ListenableBuilder(
                         listenable: _labUrl,
                         builder: (BuildContext context, Widget? _) {
                           final bool ready =
                               _labUrl.text.trim().isNotEmpty && !_busy;
+                          final String latency = _lab.latencyLabel;
                           return Row(
                             children: <Widget>[
                               OutlinedButton.icon(
-                                onPressed: ready ? _testLab : null,
+                                onPressed: ready ? _testLabCommunication : null,
                                 icon: const Icon(
                                   Icons.wifi_tethering_rounded,
                                   size: 18,
                                 ),
-                                label: const Text('Tester la connexion'),
+                                label: const Text('Tester la communication'),
                               ),
                               const SizedBox(width: AkibaSpacing.sm),
                               Expanded(
                                 child: Text(
-                                  ready
-                                      ? 'Lecture seule : le serveur est '
-                                            'interrogé sans rien écrire.'
-                                      : 'Saisissez l’URL du serveur pour '
-                                            'tester la connexion.',
+                                  _lab.reachable
+                                      ? 'Communication OK'
+                                            '${latency.isEmpty ? '' : ' · $latency'}'
+                                      : ready
+                                      ? 'Lecture seule, sans jeton.'
+                                      : 'Saisissez l’adresse du serveur.',
                                   style: AkibaTypography.legend.copyWith(
-                                    color: c.textMuted,
+                                    color: _lab.reachable
+                                        ? c.success
+                                        : c.textMuted,
                                     fontSize: 11,
                                     height: 1.35,
                                   ),
@@ -649,6 +677,73 @@ class _BackupSheetState extends State<_BackupSheet> {
                           );
                         },
                       ),
+                      const SizedBox(height: AkibaSpacing.sm),
+                      Text(
+                        'Home Lab seulement : même Wi-Fi, sans VPN. Une IP '
+                        'seule ou « IP:port » suffit (http:// ajouté '
+                        'automatiquement). Le test interroge le serveur en '
+                        'lecture seule et affiche la latence réelle.',
+                        style: AkibaTypography.legend.copyWith(
+                          color: c.textMuted,
+                          height: 1.45,
+                        ),
+                      ),
+                      if (_lab.tokenStepUnlocked) ...<Widget>[
+                        const SizedBox(height: AkibaSpacing.lg),
+                        Text(
+                          'ÉTAPE 2 · JETON & SAUVEGARDE AUTOMATIQUE',
+                          style: AkibaTypography.label.copyWith(
+                            color: c.textMuted,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: AkibaSpacing.sm),
+                        TextField(
+                          controller: _labToken,
+                          obscureText: true,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: _field(c, 'Jeton d’accès Home Lab'),
+                        ),
+                        const SizedBox(height: AkibaSpacing.sm),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: FilledButton.icon(
+                            onPressed: _busy ? null : _activateLab,
+                            icon: const Icon(Icons.key_rounded, size: 18),
+                            label: const Text('Enregistrer et activer'),
+                          ),
+                        ),
+                        const SizedBox(height: AkibaSpacing.sm),
+                        Text(
+                          _lab.tokenSaved
+                              ? 'Jeton protégé dans le coffre du système. '
+                                    'Sauvegarde automatique chiffrée '
+                                    '${widget.settings.labAutoBackup ? 'active' : 'inactive'} '
+                                    '(toutes les '
+                                    '${HomeLabAutoBackup.minimumInterval.inHours} h '
+                                    'au démarrage).'
+                              : 'Le jeton n’est jamais enregistré en clair : '
+                                    'il est protégé par le coffre du système. '
+                                    'Dès sa validation, une première '
+                                    'sauvegarde chiffrée AES-256-GCM part et '
+                                    'l’envoi automatique est armé.',
+                          style: AkibaTypography.legend.copyWith(
+                            color: _lab.tokenSaved ? c.success : c.textMuted,
+                            height: 1.45,
+                          ),
+                        ),
+                      ] else ...<Widget>[
+                        const SizedBox(height: AkibaSpacing.md),
+                        Text(
+                          'L’étape 2 (jeton et sauvegarde automatique) se '
+                          'déverrouille après un test de communication réussi.',
+                          style: AkibaTypography.legend.copyWith(
+                            color: c.textMuted,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
                     ],
                     const SizedBox(height: AkibaSpacing.lg),
                     Row(
@@ -732,6 +827,49 @@ class _BackupSheetState extends State<_BackupSheet> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// Pastille d'étape : « 1 · Adresse », « 2 · Jeton & sauvegarde auto ».
+  Widget _stepBadge(
+    AkibaColors c,
+    int number,
+    String label, {
+    bool active = true,
+    bool done = false,
+  }) {
+    final Color color = done
+        ? c.success
+        : (active ? c.textPrimary : c.textMuted);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: c.surfaceElevated,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: done ? c.success : Colors.transparent),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (done)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Icon(
+                Icons.check_circle_rounded,
+                size: 12,
+                color: c.success,
+              ),
+            ),
+          Text(
+            '$number · $label',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }

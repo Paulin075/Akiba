@@ -999,3 +999,44 @@ L’application répondait « Notifications non autorisées par le système » a
 | « Reprogrammer » et bienvenue avec miroir local périmé | ✅ 2 tests (widget + unitaire) |
 | Refus système simulé : aucun envoi même si le miroir est vrai | ✅ Test unitaire |
 | Icône `drawable/ic_stat_akiba` résolue et notification réellement affichée | 🔒 Appareil Android requis (aucun connecté) |
+
+---
+
+## 27. Sauvegarde portable et Home Lab en deux étapes (Étape 30)
+
+La clé d'une sauvegarde portable reste dérivée par PBKDF2-HMAC-SHA256 (120 000 itérations) d'une identité Google ; aucune identité de dérivation n'est écrite dans l'enveloppe. Seules les métadonnées d'affichage (`account.id`, `account.email` normalisés) y figurent, pour nommer le compte attendu en cas de refus. L'identité est lue **hors ligne** dans le coffre système, ce qui supprime toute dépendance réseau pour déchiffrer. Le jeton Home Lab quitte les réglages SQLite pour `flutter_secure_storage` et l'ancienne valeur est migrée puis effacée ; il reste envoyé en en-tête `Authorization: Bearer`, jamais dans l'URL.
+
+| Contrôle | Résultat |
+| --- | --- |
+| E-mail normalisé (minuscules, sans espaces), identifiant stable conservé | ✅ Test unitaire |
+| Même compte, saisie différente : déchiffrement réussi (plus de faux rejet) | ✅ 3 tests unitaires (e-mail, identifiant, enveloppe héritée) |
+| Enveloppe créée avant normalisation toujours restaurable | ✅ Test unitaire (variante brute) |
+| E-mail attendu affiché seulement en cas de vraie différence | ✅ Test unitaire |
+| Compte identique, clé différente : message dédié, sans accuser un autre appareil | ✅ Test unitaire |
+| Identité Google lue sans réseau (coffre) | ✅ Code ; parcours OAuth réel non exercé (🔒 compte Google) |
+| Clé AES-256-GCM, sel de 16 octets, tag GCM validé avant écriture | ✅ Inchangé (tests existants + nouveaux) |
+| Jeton Home Lab hors des réglages en clair | ✅ `SecureLabTokenStore` + migration ; ✅ test avec coffre mémoire |
+| Test IP/ping sans jeton | ✅ Sonde locale réelle (boucle 127.0.0.1) |
+| Sauvegarde automatique armée après validation du jeton | ✅ Test (PUT chiffré reçu, `lab_auto_backup`, `last_backup_target=homeLab`) |
+| Aucun serveur maître, cible Home Lab unique | ✅ Inchangé |
+| Montants, masquage, cinq thèmes, barre basse, argent de tiers | ✅ Aucun de ces chemins modifié ; enveloppe toujours chiffrée, aucun montant en clair |
+| Serveur Home Lab réel et appareil Android | 🔒 Non joints pendant ce tour |
+
+---
+
+## 28. Notifications, cauris et profil Google (Étape 31)
+
+Les notifications n'exposent toujours aucun montant : seul le texte du rappel ou de la bienvenue est transmis, désormais en style étendu (`BigTextStyleInformation`) pour qu'il ne soit pas tronqué. Le profil Google (prénom, nom) est lu à la connexion et reste **en mémoire** ; il n'est écrit que dans les réglages locaux (`first_name`, `last_name`), jamais dans une sauvegarde ni dans un journal. L'ajout de la portée `profile` au flux de bureau ne donne accès à aucun fichier supplémentaire : `drive.appdata` reste la seule portée Drive.
+
+| Contrôle | Résultat |
+| --- | --- |
+| Texte complet en `bigText`, sans troncature « … » | ✅ Test unitaire (rappels et bienvenue) |
+| Aucun montant dans les notifications | ✅ Inchangé (contenus et canaux identiques) |
+| Un style par rappel planifié, pas un détail partagé | ✅ Code ; test unitaire du constructeur de style |
+| Profil Google jamais journalisé ni sauvegardé | ✅ Code (session mémoire + réglages locaux uniquement) |
+| Portée Drive inchangée (`drive.appdata`), `profile` en lecture d'identité | ✅ Code |
+| Chiffrement AES-256-GCM, sel, tag, identité de sauvegarde | ✅ Aucun de ces chemins modifié |
+| Montants masqués, rapport/PDF en clair, tiers et dettes isolés | ✅ Inchangé |
+| Cinq thèmes, barre basse non flottante, Home Lab sans serveur maître | ✅ Inchangé |
+| Affichage réel des notifications longues et de la pluie de cauris | 🔒 Appareil Android requis (aucun connecté) |
+| Pré-remplissage depuis un vrai compte Google | 🔒 Compte Google réel requis |

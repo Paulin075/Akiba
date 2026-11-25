@@ -69,6 +69,7 @@ class AkibaSettings extends ChangeNotifier {
     'backup_drive_folder': '',
     'lab_url': '',
     'lab_token': '',
+    'lab_auto_backup': '0',
     'last_backup_at': '',
     'last_backup_target': '',
     'restore_pending_at': '',
@@ -284,7 +285,12 @@ class AkibaSettings extends ChangeNotifier {
 
   String get labUrl => raw('lab_url');
 
+  /// Valeur héritée uniquement : le jeton vit désormais dans le coffre du
+  /// système (`SecureLabTokenStore`). Cette valeur est migrée puis effacée.
   String get labToken => raw('lab_token');
+
+  /// Sauvegarde automatique Home Lab armée après validation du jeton.
+  bool get labAutoBackup => flag('lab_auto_backup');
 
   String get lastBackupAt => raw('last_backup_at');
 

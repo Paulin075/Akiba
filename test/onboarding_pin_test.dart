@@ -38,16 +38,20 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
     }
 
-    // E1 bienvenue -> E2 valeur -> E3 identité.
+    // E1 bienvenue -> E2 valeur -> E3 Google (avant toute saisie de nom).
+    await tapNext();
+    await tapNext();
+    expect(find.text('Sauvegarde et restauration'), findsOneWidget);
+    expect(find.text('Comment vous appelez-vous ?'), findsNothing);
+
+    // E3 -> E4 devise -> E5 identité (aucun compte Google lié ici).
     await tapNext();
     await tapNext();
     expect(find.text('Comment vous appelez-vous ?'), findsOneWidget);
     await tester.enterText(find.byType(TextField).at(0), 'Ama');
     await tester.enterText(find.byType(TextField).at(1), 'Koffi');
 
-    // E3 -> E4 devise -> E5 Google -> E6 comptes.
-    await tapNext();
-    await tapNext();
+    // E5 -> E6 comptes.
     await tapNext();
     expect(find.text('Vos comptes de départ'), findsOneWidget);
 

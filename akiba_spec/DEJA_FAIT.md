@@ -1843,3 +1843,74 @@ Vérification après précision du libellé du bouton : `flutter analyze` sans p
 **Tests** : « Reprogrammer » avec permission système accordée et miroir local faux affiche « 3 rappels planifiés sur 7 jours » sans message de refus ; fin d’onboarding, « Bienvenue dans AKIBA » avec « Ama Koffi » est envoyée malgré un miroir faux ; refus système simulé, aucun envoi même si le miroir est vrai ; test unitaire « bienvenue : le miroir local périmé ne bloque plus l’envoi ». `dart format lib test` propre, `flutter analyze` — No issues found, tests ciblés — 16 passés, suite complète — 173 passés.
 
 **Limite** : aucun appareil n’était connecté pendant ce tour (`adb devices` vide) ; l’affichage réel de la notification, la création du canal `akiba_accueil` et l’APK reconstruit restent à constater sur téléphone.
+
+---
+
+## Étape 30 — Restauration Drive sans faux rejet et Home Lab en deux étapes (25/11/2026)
+
+**1. Faux rejet « Connectez le même compte Google pour restaurer cette sauvegarde »**
+
+- Cause n°1 : `OnboardingFlow._restoreDriveBackup` appelait `restore(envelope)` **sans** identité Google. Toute enveloppe v3 (clé dérivée du compte) tombait dans la branche « identité absente » et affichait ce message, compte connecté ou non. `_importLocalBackup` avait le même défaut.
+- Cause n°2 : `BackupService.createEnvelope` dérivait la clé de la chaîne brute `googleAccountId`, sans normalisation : une variation d'espaces ou de casse (e-mail saisi différemment, identifiant renvoyé avec espaces) suffisait à produire une autre clé.
+- Cause n°3 : `GoogleDriveService.currentAccountId()` passait par `_activeSession()` ; hors ligne ou session expirée il levait une exception, et l'identité n'était jamais transmise.
+- Nouveau `lib/core/backup/google_account.dart` : `GoogleAccount.normalized` met l'e-mail en minuscules et supprime tous les espaces, conserve l'identifiant stable et la variante brute, et expose `keyCandidates` (identifiant normalisé, identifiant brut, e-mail normalisé, e-mail brut).
+- `createEnvelope(account:)` dérive la clé de la première identité candidate et n'écrit dans l'enveloppe que les métadonnées d'affichage du compte, jamais l'identité de dérivation.
+- `decryptEnvelope(account:)` essaie chaque variante (filtre `keyId` puis tag GCM) : une reconnexion avec le même compte aboutit même si casse ou espaces diffèrent, et une enveloppe créée avant la normalisation reste lisible.
+- `GoogleDriveService.currentAccount()` lit la session mémoire, sinon le coffre (`akiba_google_account_id`, `akiba_google_email`) **sans réseau** : la restauration d'une sauvegarde ne dépend plus d'une reconnexion.
+- L'e-mail attendu n'est affiché que si le compte connecté diffère réellement ; compte identique mais clé différente donne un message dédié (« déconnectez puis reconnectez »).
+- `_backup` utilisait aussi `currentAccountId()` : sans compte lié, la sauvegarde par dossier synchronisé échouait. Elle utilise désormais une identité vide → clé d'appareil, conformément au repli documenté.
+
+**2. Home Lab en deux étapes**
+
+- Étape 1 — adresse : `HomeLabSetup.testAddress` normalise (IP, `ip:port`, nom, URL), interroge le serveur en GET **sans jeton**, mesure la latence (`HomeLabProbe.latency`) et enregistre l'URL testée. Statut « Communication OK en 18 ms (HTTP 204) » ou diagnostic précis (port fermé, nom introuvable, aucune route, certificat, délai ; 401/403 = joignable mais jeton exigé).
+- Étape 2 — jeton : déverrouillée seulement après un test réussi (`tokenStepUnlocked`). `activateToken` revérifie la communication avec le jeton, refuse un jeton refusé sans rien persister, puis écrit le jeton dans `flutter_secure_storage` (`SecureLabTokenStore`, clé `akiba_lab_token`), arme `lab_auto_backup` et envoie immédiatement une première sauvegarde chiffrée AES-256-GCM.
+- Le jeton n'est plus écrit dans les réglages SQLite : `lab_token` reste une valeur héritée, migrée vers le coffre puis effacée (`migrateLegacyLabToken`). `ReportScheduler.sendToHomeLab` lit le jeton dans le coffre.
+- `HomeLabAutoBackup.runIfDue` (toutes les 6 h, au démarrage via `runLabAutoBackupOnStartup` dans `main.dart`, hors chemin critique) réutilise l'enveloppe AES-256-GCM existante ; silencieux quand le Wi-Fi ou le serveur manque. Aucun serveur maître n'est introduit : cible locale unique.
+- UI : pastilles « 1 · Adresse » / « 2 · Jeton & sauvegarde auto », bouton « Tester la communication », zone jeton masquée révélée après succès, bouton « Enregistrer et activer », état de la sauvegarde automatique.
+
+**3. Invariants** : chiffrement AES-256-GCM inchangé (PBKDF2 120 000 tours, sel de 16 octets), aucun montant dans les notifications ni dans l'enveloppe, masquage et rapports/PDF inchangés, cinq thèmes et barre basse non flottante non touchés, argent de tiers et créances/dettes inchangés.
+
+**Tests** : `test/backup_account_restore_test.dart` (normalisation ; e-mail/majuscules/espaces ; enveloppe héritée ; vraie différence avec e-mail attendu ; compte identique/clé différente ; absence de compte) et `test/home_lab_setup_test.dart` (étape 1 sans jeton avec latence et URL persistée ; adresse invalide ; jeton refusé sans activation ; jeton validé → coffre + `lab_auto_backup` + première sauvegarde PUT + échéance respectée ; inactif sans activation). `test/core_test.dart` adapté à la nouvelle API.
+
+**Vérifications exécutées** : `dart format lib test` (119 fichiers, 0 changement au dernier passage), `flutter analyze` — **No issues found!**, `flutter test --reporter compact` — **186 tests passés**.
+
+**Limites** : écran Home Lab et restauration Drive réelle non observés sur appareil (aucun appareil connecté) ; aucun serveur Home Lab réel joint.
+
+---
+
+## Étape 31 — Notifications complètes, cauris individuels, coffre accessible et Google avant le nom (25/11/2026)
+
+**1. Messages de notification jamais tronqués**
+
+- Nouveau `lib/core/notifications/notification_style.dart` : `AkibaNotificationStyle.android(...)` construit un `AndroidNotificationDetails` avec `BigTextStyleInformation(body, contentTitle: title)` et `ticker: body`. Le corps complet part donc à la fois comme `contentText` et comme `bigText` : Android déplie le message entier, sans « … ».
+- `LocalNotifications.show` (bienvenue) et `LocalNotifications.schedule` (rappels) utilisent ce style. La planification construisait auparavant **un seul** `NotificationDetails` constant pour tous les rappels : chaque rappel a désormais ses propres détails, donc son propre texte étendu.
+- Canaux et contenus inchangés (`akiba_accueil`, `akiba_rappels`), toujours aucun montant, et les mêmes règles de permission.
+
+**2. Chute de cauris individuels (1 cauri = 100 FCFA)**
+
+- `CauriDropAnimation` remplace le cauri unique + badge « ×N » par une **file de cauris** : 2 000 FCFA font tomber 20 cauris, chacun avec son départ échelonné, sa chute accélérée, sa rotation, un léger écart latéral resserré vers la fente, puis sa disparition dans la tirelire.
+- Plus aucun multiplicateur textuel. La durée totale reste `AkibaDurations.cauriDrop` = **3 s**, quel que soit le montant : l'espacement se resserre quand le nombre grandit et la tirelire respire jusqu'au dernier cauri.
+- Grands montants : au-delà de `maxVisibleCauris` (60), la file est plafonnée pour rester fluide ; aucun compteur n'est réintroduit. Son d'épargne, halo, étincelles et mode « Réduire les animations » conservés.
+- `showSavingsCelebration` reçoit déjà le nombre exact (`SavingsProjection.cauriCountForAmount`) : le message d'encouragement apparaît toujours à la fin des 3 s, en fondu.
+
+**3. Coffre d'épargne accessible, plus aucune « phase » en attente sur l'accueil**
+
+- L'action rapide « Épargne » de l'accueil ouvre désormais le portefeuille sur l'onglet **Épargne** (`ValueNotifier<int> segmentRequest` transmis par `AkibaShell`), où les coffres, versements, retraits, objectifs et création de coffre sont opérationnels.
+- « Voir tout » ouvre l'onglet **Mouvements** (historique complet déjà présent). Un mouvement d'épargne modifié depuis l'accueil renvoie vers l'onglet Épargne au lieu d'annoncer une phase.
+- La carte d'aperçu IA ouvre l'assistant déjà implémenté (`openAssistant`) ; le libellé « module M12 (Phase 6) » devient « module M12 ».
+- Plus aucun message « Phase 5 » / « Phase 6 » sur l'accueil (`_notYet` supprimé). Les invariants restent : montants masqués selon le réglage, argent de tiers et créances/dettes isolés, cinq thèmes, barre basse non flottante.
+
+**4. Onboarding : Google avant la saisie du nom**
+
+- Ordre des étapes : E1 bienvenue, E2 valeur, **E3 Sauvegarde et restauration (Google)**, E4 devise, **E5 identité manuelle**, puis comptes, PIN, permissions, habitudes, données, prêt.
+- Nouveau `lib/core/backup/google_profile.dart` : `GoogleProfile.fromIdToken` lit `given_name`/`family_name` (ou `name`) et `GoogleProfile.fromDisplayName` coupe un nom complet au premier espace. `GoogleSession` porte ce profil ; Android le remplit depuis `GoogleSignInAccount.displayName`, le flux de bureau depuis l'`id_token` (portée `profile` ajoutée).
+- À la connexion, prénom et nom sont pré-remplis **sans écraser** une saisie existante, puis affichés dans l'étape Google en champs modifiables. Si les deux champs sont renseignés, l'étape d'identité manuelle est **sautée** ; sans connexion Google, elle reste demandée et validée comme avant.
+- Les noms issus du profil sont enregistrés avec `google_linked` dès l'étape Google, donc l'étape sautée ne laisse aucun réglage vide.
+
+**5. Invariants** : AES-256-GCM et PBKDF2 inchangés, aucun montant dans les notifications, masquage et rapport/PDF inchangés, argent de tiers et créances/dettes inchangés, cinq thèmes et barre basse non flottante non touchés, Home Lab toujours seul sans serveur maître.
+
+**Tests** : `test/notification_style_test.dart` (bigText complet sans « … », bienvenue), `test/savings_animation_test.dart` (20 cauris pour 2 000 FCFA, aucun « × », 3 s, plafond fluide), `test/savings_vault_access_test.dart` (action Épargne → coffres, ouverture directe du segment), `test/onboarding_order_test.dart` (profil Google, Google avant le nom). `test/onboarding_pin_test.dart` adapté au nouvel ordre.
+
+**Vérifications** : `dart format lib test` (125 fichiers, 0 changement), `flutter analyze` — **No issues found!**, `flutter test --reporter compact` — **194 tests passés**.
+
+**Limites** : rendu réel des notifications, de la pluie de cauris et de l'écran Google non observé (aucun appareil connecté) ; un vrai compte Google reste nécessaire pour constater le pré-remplissage du prénom et du nom.

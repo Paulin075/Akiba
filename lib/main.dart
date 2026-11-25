@@ -5,6 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+import 'core/backup/home_lab_setup.dart';
 import 'core/config/google_oauth_config.dart';
 import 'core/database/akiba_database.dart';
 import 'core/format/akiba_date.dart';
@@ -69,6 +70,8 @@ Future<void> main() async {
   // du système ou un redémarrage ne les laisse pas périmés. C'est le seul
   // point d'entrée, pour ne pas inscrire deux fois la tâche Workmanager.
   unawaited(ReminderScheduler.reprogram(settings, store: store));
+  // Sauvegarde automatique Home Lab : silencieuse, jamais bloquante.
+  unawaited(runLabAutoBackupOnStartup(store, settings));
   BrandImages.warmUp();
 }
 

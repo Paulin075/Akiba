@@ -51,10 +51,15 @@ class PortfolioScreen extends StatefulWidget {
     super.key,
     required this.store,
     required this.revision,
+    this.segmentRequest,
   });
 
   final AkibaStore store;
   final AkibaDataRevision revision;
+
+  /// Demande externe de segment (0 comptes, 1 mouvements, 2 épargne,
+  /// 3 tiers). L'accueil s'en sert pour ouvrir directement les coffres.
+  final ValueNotifier<int>? segmentRequest;
 
   @override
   State<PortfolioScreen> createState() => _PortfolioScreenState();
@@ -83,17 +88,36 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   void initState() {
     super.initState();
     widget.revision.addListener(_reload);
+    widget.segmentRequest?.addListener(_applySegmentRequest);
+    _applySegmentRequest();
   }
 
   @override
   void didUpdateWidget(covariant PortfolioScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.store, widget.store)) _reload();
+    if (!identical(oldWidget.segmentRequest, widget.segmentRequest)) {
+      oldWidget.segmentRequest?.removeListener(_applySegmentRequest);
+      widget.segmentRequest?.addListener(_applySegmentRequest);
+      _applySegmentRequest();
+    }
+  }
+
+  /// Applique le segment demandé depuis l'accueil (Épargne, Mouvements).
+  void _applySegmentRequest() {
+    final int? requested = widget.segmentRequest?.value;
+    if (requested == null || !mounted) return;
+    final int next = requested.clamp(0, 3).toInt();
+    if (next == _segment) return;
+    // Le notifier est modifié depuis un geste (accueil → Épargne), jamais
+    // pendant une construction : setState est donc immédiat et fiable.
+    setState(() => _segment = next);
   }
 
   @override
   void dispose() {
     widget.revision.removeListener(_reload);
+    widget.segmentRequest?.removeListener(_applySegmentRequest);
     super.dispose();
   }
 

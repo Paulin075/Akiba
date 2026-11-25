@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
+import 'notification_style.dart';
 import 'reminder_planner.dart';
 
 /// Livraison des rappels par le système (notifications locales).
@@ -206,20 +207,21 @@ abstract final class LocalNotifications {
         id: id,
         title: title,
         body: body,
-        notificationDetails: const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'akiba_accueil',
-            'AKIBA',
-            icon: 'ic_stat_akiba',
+        notificationDetails: NotificationDetails(
+          // Texte étendu : le message entier s'affiche, jamais coupé par
+          // « … » dans la barre de notification.
+          android: AkibaNotificationStyle.android(
+            channelId: AkibaNotificationStyle.welcomeChannelId,
+            channelName: AkibaNotificationStyle.welcomeChannelName,
             channelDescription:
                 'Bienvenue et messages d’accueil. '
                 'Aucun montant.',
-            importance: Importance.defaultImportance,
-            priority: Priority.defaultPriority,
+            title: title,
+            body: body,
           ),
-          iOS: DarwinNotificationDetails(),
-          macOS: DarwinNotificationDetails(),
-          linux: LinuxNotificationDetails(),
+          iOS: const DarwinNotificationDetails(),
+          macOS: const DarwinNotificationDetails(),
+          linux: const LinuxNotificationDetails(),
         ),
         payload: 'welcome',
       );
@@ -235,22 +237,6 @@ abstract final class LocalNotifications {
     if (!ready) return 0;
     await cancelAll();
 
-    const NotificationDetails details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        'akiba_rappels',
-        'Rappels AKIBA',
-        icon: 'ic_stat_akiba',
-        channelDescription:
-            'Rappels matin, midi et soir. Aucun montant si le masquage est '
-            'actif.',
-        importance: Importance.defaultImportance,
-        priority: Priority.defaultPriority,
-      ),
-      iOS: DarwinNotificationDetails(),
-      macOS: DarwinNotificationDetails(),
-      linux: LinuxNotificationDetails(),
-    );
-
     int scheduled = 0;
     for (int index = 0; index < plans.length; index++) {
       final ReminderPlan plan = plans[index];
@@ -260,7 +246,22 @@ abstract final class LocalNotifications {
           title: plan.title,
           body: plan.body,
           scheduledDate: tz.TZDateTime.from(plan.when, tz.local),
-          notificationDetails: details,
+          // Un style neuf par rappel : le texte étendu porte le message de
+          // CE rappel, et non le dernier construit.
+          notificationDetails: NotificationDetails(
+            android: AkibaNotificationStyle.android(
+              channelId: AkibaNotificationStyle.remindersChannelId,
+              channelName: AkibaNotificationStyle.remindersChannelName,
+              channelDescription:
+                  'Rappels matin, midi et soir. Aucun montant si le masquage '
+                  'est actif.',
+              title: plan.title,
+              body: plan.body,
+            ),
+            iOS: const DarwinNotificationDetails(),
+            macOS: const DarwinNotificationDetails(),
+            linux: const LinuxNotificationDetails(),
+          ),
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
           payload: plan.slot,
         );

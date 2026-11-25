@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../data/akiba_store.dart';
 import '../backup/backup_service.dart';
+import '../backup/home_lab_setup.dart';
 import '../notifications/local_notifications.dart';
 import '../profile/profile_photo.dart';
 import '../state/akiba_settings.dart';
@@ -87,13 +88,19 @@ abstract final class ReportScheduler {
     required AkibaSettings settings,
     required List<int> pdf,
     BackupService? service,
+    LabTokenStore? tokenStore,
+    String? token,
   }) async {
     final String url = settings.labUrl.trim();
     if (url.isEmpty) return false;
+    // Jeton lu dans le coffre du système, jamais dans les réglages en clair.
+    final String bearer = (token ?? '').trim().isNotEmpty
+        ? token!.trim()
+        : await (tokenStore ?? const SecureLabTokenStore()).read();
     try {
       await (service ?? BackupService(settings.store)).putRemote(
         url: url,
-        token: settings.labToken,
+        token: bearer,
         envelope: <String, dynamic>{
           'kind': 'akiba_report',
           'format': 'pdf-base64',

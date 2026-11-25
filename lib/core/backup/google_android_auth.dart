@@ -9,11 +9,15 @@ class GoogleAndroidToken {
     required this.accessToken,
     required this.email,
     this.accountId = '',
+    this.displayName = '',
   });
 
   final String accessToken;
   final String email;
   final String accountId;
+
+  /// Nom complet du compte Google, utilisé pour pré-remplir l'onboarding.
+  final String displayName;
 }
 
 /// Contrat minimal de la connexion Android, pour tester la branche et le repli
@@ -124,6 +128,7 @@ class GoogleSignInAndroidAuth implements GoogleAndroidAuth {
       accessToken: authorization.accessToken,
       email: account.email,
       accountId: account.id,
+      displayName: account.displayName ?? '',
     );
   }
 

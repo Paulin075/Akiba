@@ -597,3 +597,26 @@ Reste ouvert : rendu visuel de la transition et des messages non observé sur ap
 
 - Corrigé : l’initialisation du greffon utilisait `@mipmap/ic_launcher`, refusée par `getIdentifier(nom, "drawable", …)`, ce qui faisait échouer `ensureReady` et renvoyait « non autorisé » partout. L’icône est désormais `drawable/ic_stat_akiba` et la lecture de permission passe par `areNotificationsEnabled()` hors initialisation.
 - Reste à constater sur appareil : accord POST_NOTIFICATIONS réel, bienvenue effectivement affichée sur le canal `akiba_accueil`, reprogrammation réussie, puis canal désactivé individuellement. Aucun appareil connecté ni APK reconstruit pendant ce correctif.
+
+---
+
+## Étape 30 — Restauration Drive et Home Lab en deux étapes
+
+- Corrigé : l'onboarding restaure désormais avec l'identité Google du compte lié (lue hors ligne dans le coffre) ; l'identité est normalisée (e-mail minuscule sans espaces + identifiant stable) à la création comme à la restauration, plusieurs variantes sont essayées et l'e-mail attendu n'apparaît qu'en cas de vraie différence de compte.
+- Corrigé : le Home Lab se configure en deux étapes — test IP/ping sans jeton avec latence, puis jeton protégé dans `flutter_secure_storage` et sauvegarde automatique AES-256-GCM (toutes les 6 h, au démarrage). L'ancien `lab_token` des réglages est migré puis effacé.
+- Reste à vérifier avec un vrai compte Google : restauration Drive sur un second appareil, avec un e-mail saisi différemment, puis avec un autre compte (message attendu).
+- Reste à vérifier avec un vrai serveur Home Lab : latence réelle, jeton refusé puis accepté, première sauvegarde automatique et réveil au démarrage suivant.
+- L'écran du centre de sauvegarde n'a pas été observé visuellement pendant ce tour (aucun appareil, aucune capture) ; les tests couvrent la machine à états et la requête HTTP, pas le rendu.
+
+---
+
+## Étape 31 — Notifications, cauris, coffre et ordre de l'onboarding
+
+- Fait : notifications Android en `BigTextStyleInformation` (corps complet en `contentText` et `bigText`), pour la bienvenue comme pour chaque rappel planifié ; plus de troncature « … ».
+- Fait : l'animation d'épargne fait tomber **un cauri par tranche de 100 FCFA** (2 000 FCFA = 20 cauris), sans badge « ×N », en 3 s constants ; au-delà de 60 cauris visibles, la file est plafonnée pour rester fluide.
+- Fait : l'action « Épargne » de l'accueil ouvre l'onglet Épargne du portefeuille (coffres, versements, retraits, objectifs) ; « Voir tout » ouvre les mouvements ; l'aperçu IA ouvre l'assistant. Plus aucune mention « Phase 5 » ou « Phase 6 » sur l'accueil.
+- Fait : l'onboarding demande Google **avant** le prénom et le nom ; le profil Google pré-remplit les deux champs (modifiables) et l'étape manuelle est sautée quand ils sont renseignés.
+- Tests : 4 nouveaux fichiers ciblés + parcours PIN adapté ; `dart format` propre, `flutter analyze` sans issue, suite complète — 194 tests passés.
+- Reste à vérifier sur appareil Android : notification longue réellement dépliée (bienvenue et rappel), pluie de 20 cauris et gros montant, absence de saccade sur un téléphone modeste.
+- Reste à vérifier avec un vrai compte Google : pré-remplissage du prénom et du nom sur Android (`displayName`) et sur ordinateur (`id_token` avec portée `profile`), puis saut effectif de l'étape manuelle. Un compte sans nom public gardera la saisie manuelle, ce qui est voulu.
+- Reste à faire si voulu : un compteur discret du nombre de cauris (texte accessible) pour les personnes malvoyantes, sans réintroduire de badge visuel permanent.

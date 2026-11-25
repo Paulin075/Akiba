@@ -7,8 +7,10 @@ import 'package:crypto/crypto.dart' as hash;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config/google_oauth_config.dart';
+import 'google_account.dart';
 import 'google_android_auth.dart';
 import 'google_auth_exception.dart';
+import 'google_profile.dart';
 import 'google_token_vault.dart';
 
 export 'google_auth_exception.dart';
@@ -21,12 +23,16 @@ class GoogleSession {
     required this.expiresAt,
     this.email = '',
     this.accountId = '',
+    this.profile = GoogleProfile.empty,
   });
 
   final String accessToken;
   final DateTime expiresAt;
   final String email;
   final String accountId;
+
+  /// Prénom et nom du profil Google, quand Google les fournit.
+  final GoogleProfile profile;
 
   bool get expired =>
       DateTime.now().isAfter(expiresAt.subtract(const Duration(minutes: 2)));
@@ -89,9 +95,38 @@ class GoogleDriveService {
 
   Future<bool> get isLinked async => (await linkedEmail()) != null;
 
+  /// Identité Google normalisée du compte lié.
+  ///
+  /// Lecture **sans réseau** : la session en mémoire suffit, sinon le coffre
+  /// fournit l'identifiant stable et l'e-mail mémorisés à la connexion. La
+  /// restauration d'une sauvegarde chiffrée n'exige donc jamais internet.
+  Future<GoogleAccount> currentAccount() async {
+    final GoogleSession? cached = _session;
+    if (cached != null &&
+        (cached.accountId.isNotEmpty || cached.email.isNotEmpty)) {
+      return GoogleAccount.normalized(
+        id: cached.accountId,
+        email: cached.email,
+      );
+    }
+    try {
+      final String? id = await _vault.read(_accountIdKey);
+      final String? email = await _vault.read(_emailKey);
+      return GoogleAccount.normalized(id: id, email: email);
+    } catch (_) {
+      return GoogleAccount.none;
+    }
+  }
+
   /// Identifiant Google stable (claim `sub`), uniquement en mémoire dans les
   /// enveloppes; il sert à dériver la clé et n'est jamais ajouté au backup.
-  Future<String> currentAccountId() async => (await _activeSession()).accountId;
+  Future<String> currentAccountId() async => (await currentAccount()).id;
+
+  /// Profil du compte connecté (prénom, nom), ou un profil vide.
+  ///
+  /// Aucun appel réseau : la connexion vient de mémoriser ces champs. Un
+  /// redémarrage sans session renvoie un profil vide, jamais une erreur.
+  GoogleProfile currentProfile() => _session?.profile ?? GoogleProfile.empty;
 
   /// Connecte le compte Google : `google_sign_in` sur Android, navigateur +
   /// boucle locale ailleurs. Lève [GoogleAuthException] si la connexion échoue.
@@ -437,6 +472,7 @@ class GoogleDriveService {
         expiresAt: DateTime.now().add(_androidTokenLife),
         email: token.email.isEmpty ? email : token.email,
         accountId: token.accountId,
+        profile: GoogleProfile.fromDisplayName(token.displayName),
       );
       _session = session;
       return session;
@@ -488,6 +524,7 @@ class GoogleDriveService {
       expiresAt: DateTime.now().add(_androidTokenLife),
       email: token.email,
       accountId: token.accountId,
+      profile: GoogleProfile.fromDisplayName(token.displayName),
     );
     _session = session;
     return session;
@@ -516,6 +553,7 @@ class GoogleDriveService {
       expiresAt: _expiry(tokens),
       email: email,
       accountId: accountId,
+      profile: GoogleProfile.fromIdToken(tokens['id_token']),
     );
     try {
       await _vault.write(_refreshKey, refresh);

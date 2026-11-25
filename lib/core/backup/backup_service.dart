@@ -19,6 +19,7 @@ import '../../data/models/third_party.dart';
 import '../../data/models/transaction_record.dart';
 import '../security/aes_box.dart';
 import '../state/akiba_settings.dart';
+import 'google_account.dart';
 
 /// Étapes d'une sauvegarde ou d'une restauration, pour l'animation de suivi.
 enum BackupStage {
@@ -57,6 +58,7 @@ class HomeLabProbe {
     required this.authenticated,
     required this.message,
     this.statusCode,
+    this.latency,
   });
 
   final bool reachable;
@@ -64,7 +66,14 @@ class HomeLabProbe {
   final String message;
   final int? statusCode;
 
+  /// Temps de réponse mesuré (aller-retour HTTP), quand le serveur a répondu.
+  final Duration? latency;
+
   bool get ok => reachable && authenticated;
+
+  /// Latence lisible : `18 ms`.
+  String get latencyLabel =>
+      latency == null ? '' : '${latency!.inMilliseconds} ms';
 }
 
 class BackupService {
@@ -131,17 +140,23 @@ class BackupService {
 
   Future<Map<String, dynamic>> createEnvelope({
     required String deviceId,
-    String? googleAccountId,
+    GoogleAccount account = GoogleAccount.none,
     void Function(BackupStage)? onStage,
   }) async {
     onStage?.call(BackupStage.preparing);
     final Map<String, dynamic> payload = await collectPayload();
     final List<int> plain = utf8.encode(jsonEncode(payload));
-    final List<int> salt = googleAccountId == null || _keyOverride != null
-        ? const <int>[]
-        : List<int>.generate(16, (_) => Random.secure().nextInt(256));
-    final List<int> key = googleAccountId != null && _keyOverride == null
-        ? _deriveKey(googleAccountId, salt)
+    // Identité canonique : identifiant Google stable normalisé, à défaut
+    // l'e-mail en minuscules. Elle sert seulement à dériver la clé et n'est
+    // jamais écrite dans l'enveloppe.
+    final List<String> identities = account.keyCandidates;
+    final String identity = identities.isEmpty ? '' : identities.first;
+    final bool perAccount = identity.isNotEmpty && _keyOverride == null;
+    final List<int> salt = perAccount
+        ? List<int>.generate(16, (_) => Random.secure().nextInt(256))
+        : const <int>[];
+    final List<int> key = perAccount
+        ? _deriveKey(identity, salt)
         : await _key(create: true);
     if (key.length != keyLength) {
       throw const BackupException(
@@ -155,12 +170,11 @@ class BackupService {
 
     return <String, dynamic>{
       'format': 'akiba-backup',
-      'version': googleAccountId != null && _keyOverride == null ? 3 : 2,
+      'version': perAccount ? 3 : 2,
       'cipher': 'AES-256-GCM',
-      'kdf': googleAccountId != null && _keyOverride == null
-          ? 'PBKDF2-HMAC-SHA256'
-          : 'device-key',
+      'kdf': perAccount ? 'PBKDF2-HMAC-SHA256' : 'device-key',
       if (salt.isNotEmpty) 'salt': base64Encode(salt),
+      if (perAccount) 'account': account.toJson(),
       'keyId': hash.sha256.convert(key).toString().substring(0, 16),
       'ciphertext': sealed,
       'sha256': hash.sha256.convert(plain).toString(),
@@ -226,30 +240,49 @@ class BackupService {
 
   Future<Map<String, dynamic>> decryptEnvelope(
     Map<String, dynamic> envelope, {
-    String? googleAccountId,
+    GoogleAccount account = GoogleAccount.none,
     void Function(BackupStage)? onStage,
   }) async {
     _checkEnvelope(envelope);
     final String kdf = envelope['kdf'] as String? ?? 'device-key';
-    final List<int> key;
     if (kdf == 'PBKDF2-HMAC-SHA256') {
-      if (googleAccountId == null || googleAccountId.isEmpty) {
-        throw const BackupException(
-          'Connectez le même compte Google pour restaurer cette sauvegarde.',
-        );
-      }
       final Object? rawSalt = envelope['salt'];
       if (rawSalt is! String) {
         throw const BackupException('Sel de sauvegarde manquant ou invalide.');
       }
+      final List<int> salt;
       try {
-        key = _deriveKey(googleAccountId, base64Decode(rawSalt));
+        salt = base64Decode(rawSalt);
       } catch (_) {
         throw const BackupException('Sel de sauvegarde invalide.');
       }
-    } else {
-      key = await _key();
+      // Chaque identité candidate du compte connecté est essayée : la
+      // normalisation (minuscules, sans espaces) puis les variantes brutes
+      // permettent de retrouver une sauvegarde faite avec le même compte.
+      final List<String> candidates = account.keyCandidates;
+      if (candidates.isEmpty) throw _accountMismatch(envelope, account);
+      onStage?.call(BackupStage.decrypting);
+      for (final String candidate in candidates) {
+        final List<int> candidateKey = _deriveKey(candidate, salt);
+        if (candidateKey.length != keyLength) continue;
+        if (!_keyFits(envelope, candidateKey)) continue;
+        final String? clear = await AesBox.open(
+          envelope['ciphertext'] as String,
+          candidateKey,
+        );
+        if (clear == null) continue;
+        final String expected = envelope['sha256'] as String? ?? '';
+        if (hash.sha256.convert(utf8.encode(clear)).toString() != expected) {
+          throw const BackupException('Empreinte de sauvegarde invalide.');
+        }
+        onStage?.call(BackupStage.verifying);
+        return jsonDecode(clear) as Map<String, dynamic>;
+      }
+      // Aucune variante n'a ouvert l'enveloppe : c'est une vraie différence.
+      throw _accountMismatch(envelope, account);
     }
+
+    final List<int> key = await _key();
     if (key.length != keyLength) {
       throw const BackupException(
         'Cette sauvegarde appartient à un autre appareil : sa clé AES-256 '
@@ -284,6 +317,43 @@ class BackupService {
     return jsonDecode(clear) as Map<String, dynamic>;
   }
 
+  /// Vrai si l'empreinte `keyId` de l'enveloppe correspond à cette clé.
+  /// Une enveloppe sans `keyId` (ancienne) laisse le tag GCM décider.
+  bool _keyFits(Map<String, dynamic> envelope, List<int> key) {
+    final String? keyId = envelope['keyId'] as String?;
+    if (keyId == null) return true;
+    return keyId == hash.sha256.convert(key).toString().substring(0, 16);
+  }
+
+  /// Message de refus, avec l'e-mail attendu **seulement** si le compte
+  /// connecté est réellement différent de celui de la sauvegarde.
+  BackupException _accountMismatch(
+    Map<String, dynamic> envelope,
+    GoogleAccount account,
+  ) {
+    final GoogleAccount expected = GoogleAccount.fromJson(envelope['account']);
+    final bool differentAccount =
+        expected.email.isNotEmpty && expected.email != account.email;
+    if (differentAccount) {
+      return BackupException(
+        'Cette sauvegarde appartient au compte Google ${expected.email} : '
+        'connectez ce compte pour la restaurer.',
+      );
+    }
+    if (account.isNotEmpty &&
+        expected.email.isNotEmpty &&
+        expected.email == account.email) {
+      return const BackupException(
+        'Compte Google identique, mais la clé de sauvegarde diffère sur cet '
+        'appareil : déconnectez puis reconnectez ce compte Google, puis '
+        'réessayez.',
+      );
+    }
+    return const BackupException(
+      'Connectez le même compte Google pour restaurer cette sauvegarde.',
+    );
+  }
+
   void _checkEnvelope(Map<String, dynamic> envelope) {
     if (envelope['format'] != 'akiba-backup' ||
         envelope['cipher'] != 'AES-256-GCM' ||
@@ -304,13 +374,13 @@ class BackupService {
   /// locales : les identifiants déjà présents sont ignorés.
   Future<Map<String, int>> restore(
     Map<String, dynamic> envelope, {
-    String? googleAccountId,
+    GoogleAccount account = GoogleAccount.none,
     void Function(BackupStage)? onStage,
   }) async {
     onStage?.call(BackupStage.downloading);
     final Map<String, dynamic> payload = await decryptEnvelope(
       envelope,
-      googleAccountId: googleAccountId,
+      account: account,
       onStage: onStage,
     );
 
@@ -543,6 +613,7 @@ class BackupService {
     final HttpClient client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 8)
       ..userAgent = 'AKIBA-probe/1.0';
+    final Stopwatch watch = Stopwatch()..start();
     try {
       final HttpClientRequest request = await client.getUrl(uri);
       if (token.trim().isNotEmpty) {
@@ -555,14 +626,20 @@ class BackupService {
       );
       // Le corps n'est pas nécessaire : on le vide pour libérer la connexion.
       await response.drain<void>().timeout(const Duration(seconds: 10));
+      final Duration latency = watch.elapsed;
       final int status = response.statusCode;
+      final bool withToken = token.trim().isNotEmpty;
+      final String timing = ' en ${latency.inMilliseconds} ms';
       if (status == 200 || status == 204) {
         return HomeLabProbe(
           reachable: true,
           authenticated: true,
           statusCode: status,
-          message:
-              'Serveur Home Lab joignable et jeton accepté (HTTP $status).',
+          latency: latency,
+          message: withToken
+              ? 'Communication OK$timing : jeton accepté (HTTP $status).'
+              : 'Communication OK$timing (HTTP $status) : serveur joignable, '
+                    'aucun jeton exigé.',
         );
       }
       if (status == 404) {
@@ -570,9 +647,10 @@ class BackupService {
           reachable: true,
           authenticated: true,
           statusCode: status,
+          latency: latency,
           message:
-              'Serveur joignable et jeton accepté, aucune sauvegarde à cette '
-              'adresse (HTTP 404) : la première sauvegarde la créera.',
+              'Communication OK$timing (HTTP 404) : serveur joignable, aucune '
+              'sauvegarde à cette adresse. La première sauvegarde la créera.',
         );
       }
       if (status == 401 || status == 403) {
@@ -580,17 +658,21 @@ class BackupService {
           reachable: true,
           authenticated: false,
           statusCode: status,
-          message:
-              'Serveur joignable, mais le jeton est refusé (HTTP $status). '
-              'Vérifiez le jeton d’accès Home Lab.',
+          latency: latency,
+          message: withToken
+              ? 'Serveur joignable$timing, mais le jeton est refusé '
+                    '(HTTP $status). Vérifiez le jeton d’accès Home Lab.'
+              : 'Communication OK$timing : serveur joignable, il exige un '
+                    'jeton (HTTP $status). Passez à l’étape 2.',
         );
       }
       return HomeLabProbe(
         reachable: true,
         authenticated: false,
         statusCode: status,
+        latency: latency,
         message:
-            'Serveur joignable, mais il répond HTTP $status : vérifiez '
+            'Serveur joignable$timing, mais il répond HTTP $status : vérifiez '
             'l’adresse exacte de la sauvegarde AKIBA.',
       );
     } on HandshakeException {

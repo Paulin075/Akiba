@@ -6,7 +6,9 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/backup/backup_progress.dart';
 import '../../core/backup/backup_service.dart';
+import '../../core/backup/google_account.dart';
 import '../../core/backup/google_drive_backup.dart';
+import '../../core/backup/google_profile.dart';
 import '../../core/config/google_oauth_config.dart';
 import '../../core/format/akiba_currency.dart';
 import '../../core/format/akiba_date.dart';
@@ -185,6 +187,15 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     try {
       final GoogleSession session = await _google.signIn();
       if (!mounted) return;
+      // Prénom et nom du profil Google : pré-remplis, jamais imposés. Un
+      // champ déjà saisi par la personne n'est pas écrasé.
+      final GoogleProfile profile = session.profile;
+      if (profile.givenName.isNotEmpty && _firstName.text.trim().isEmpty) {
+        _firstName.text = profile.givenName;
+      }
+      if (profile.familyName.isNotEmpty && _lastName.text.trim().isEmpty) {
+        _lastName.text = profile.familyName;
+      }
       setState(() {
         _googleEmail = session.email.isEmpty ? 'compte Google' : session.email;
         _googleLinked = true;
@@ -235,9 +246,13 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     });
     _backupStage.value = BackupStage.downloading;
     try {
+      // L'identité Google du compte connecté est transmise : sans elle, une
+      // sauvegarde à clé dérivée du compte était refusée à tort.
+      final GoogleAccount account = await _google.currentAccount();
       final Map<String, int> restored = await BackupService(widget.store)
           .restore(
             envelope,
+            account: account,
             onStage: (BackupStage stage) => _backupStage.value = stage,
           );
       widget.revision.bump();
@@ -279,6 +294,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
       }
       final Map<String, int> restored = await service.restore(
         envelope,
+        account: await _google.currentAccount(),
         onStage: (BackupStage stage) => _backupStage.value = stage,
       );
       widget.revision.bump();
@@ -475,7 +491,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
 
   bool _validateStep() {
     switch (_step) {
-      case 2: // E3 identité
+      case 4: // E4 identité (seulement sans compte Google)
         final String first = _firstName.text.trim();
         final String last = _lastName.text.trim();
         if (first.length < 2 || first.length > 40) {
@@ -553,7 +569,27 @@ class _OnboardingFlowState extends State<OnboardingFlow>
       widget.onFinished();
       return;
     }
-    await _go(1);
+    // Compte Google lié : prénom et nom déjà récupérés et modifiables à
+    // l'étape Google. On ne redemande donc pas la saisie manuelle.
+    final bool skipIdentity =
+        _step == 3 &&
+        _googleLinked &&
+        _firstName.text.trim().length >= 2 &&
+        _lastName.text.trim().isNotEmpty;
+    await _go(skipIdentity ? 2 : 1);
+  }
+
+  /// Enregistre prénom et nom. À l'étape Google, une valeur vide ne remplace
+  /// pas un nom déjà connu ; à l'étape manuelle, les deux champs sont validés.
+  Future<void> _saveIdentity({bool skipEmpty = false}) async {
+    final String first = _firstName.text.trim();
+    final String last = _lastName.text.trim();
+    if (!skipEmpty || first.isNotEmpty) {
+      await widget.settings.set('first_name', first);
+    }
+    if (!skipEmpty || last.isNotEmpty) {
+      await widget.settings.set('last_name', last);
+    }
   }
 
   Future<void> _persistStep() async {
@@ -564,14 +600,16 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         await widget.settings.setLanguage(_language);
         await widget.settings.setThemeId(_theme);
       case 2:
-        await widget.settings.set('first_name', _firstName.text.trim());
-        await widget.settings.set('last_name', _lastName.text.trim());
+        await widget.settings.setFlag('google_linked', _googleLinked);
+        // Les noms viennent du profil Google (ou y ont été ajustés) : ils sont
+        // enregistrés ici pour que l'étape manuelle puisse être sautée.
+        await _saveIdentity(skipEmpty: true);
+      case 4:
+        await _saveIdentity();
       case 3:
         await widget.settings.setCurrency(_currency);
         await widget.settings.set('timezone', _timezone);
         await widget.settings.set('date_style', _dateStyle);
-      case 4:
-        await widget.settings.setFlag('google_linked', _googleLinked);
       case 5:
         await widget.store.ensureDefaultAccounts();
         final List<Account> accounts = await widget.store.accounts();
@@ -727,9 +765,11 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     return switch (_step) {
       0 => _welcome(c),
       1 => _value(c),
-      2 => _identity(c),
+      // Google AVANT la saisie manuelle du nom : le profil pré-remplit
+      // prénom et nom, et l'étape 5 saute la saisie quand tout est là.
+      2 => _googleStep(c),
       3 => _currencyStep(c),
-      4 => _googleStep(c),
+      4 => _identity(c),
       5 => _accountsStep(c),
       6 => _pinStep(c),
       7 => _permissionsStep(c),
@@ -1258,6 +1298,45 @@ class _OnboardingFlowState extends State<OnboardingFlow>
             ],
           ),
         ),
+        if (_googleLinked) ...<Widget>[
+          const SizedBox(height: AkibaSpacing.lg),
+          AkibaSurfaceCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'Prénom et nom',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: c.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: AkibaSpacing.xs),
+                Text(
+                  'Récupérés depuis votre profil Google. Vous pouvez les '
+                  'ajuster ici : AKIBA n’en demandera pas une deuxième saisie.',
+                  style: AkibaTypography.legend.copyWith(
+                    color: c.textMuted,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: AkibaSpacing.md),
+                TextField(
+                  controller: _firstName,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: _field(c, 'Prénom'),
+                ),
+                const SizedBox(height: AkibaSpacing.md),
+                TextField(
+                  controller: _lastName,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: _field(c, 'Nom'),
+                ),
+              ],
+            ),
+          ),
+        ],
         if (_googleEmail != null && _googleChecked) ...<Widget>[
           const SizedBox(height: AkibaSpacing.lg),
           if (meta != null) ...<Widget>[

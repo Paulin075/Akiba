@@ -50,6 +50,9 @@ class AkibaShell extends StatefulWidget {
 class _AkibaShellState extends State<AkibaShell> {
   int _index = 0;
   final ValueNotifier<bool> _masked = ValueNotifier<bool>(false);
+
+  /// Segment demandé au portefeuille : 2 = Épargne (coffres).
+  final ValueNotifier<int> _portfolioSegment = ValueNotifier<int>(0);
   final AkibaDataRevision _revision = AkibaDataRevision();
 
   StreamSubscription<String>? _smsSubscription;
@@ -76,6 +79,7 @@ class _AkibaShellState extends State<AkibaShell> {
   void dispose() {
     _smsSubscription?.cancel();
     _masked.dispose();
+    _portfolioSegment.dispose();
     _revision.dispose();
     super.dispose();
   }
@@ -120,6 +124,11 @@ class _AkibaShellState extends State<AkibaShell> {
     );
   }
 
+  void _openSavings() {
+    _portfolioSegment.value = 2;
+    setState(() => _index = 2);
+  }
+
   Future<void> _openAssistant() {
     return openAssistant(
       context,
@@ -154,6 +163,8 @@ class _AkibaShellState extends State<AkibaShell> {
                             themeId: widget.settings.themeId,
                             onThemeChanged: widget.settings.setThemeId,
                             onSeeAllMovements: () => setState(() => _index = 2),
+                            onOpenSavings: _openSavings,
+                            onOpenAssistant: _openAssistant,
                           ),
                           AnalysisScreen(
                             store: widget.store,
@@ -162,6 +173,7 @@ class _AkibaShellState extends State<AkibaShell> {
                           PortfolioScreen(
                             store: widget.store,
                             revision: _revision,
+                            segmentRequest: _portfolioSegment,
                           ),
                           ProfileScreen(
                             store: widget.store,

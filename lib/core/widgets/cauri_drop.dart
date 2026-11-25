@@ -16,6 +16,12 @@ import '../theme/akiba_colors.dart';
 ///
 /// Durée par défaut : **3 secondes** (versement d'épargne) ; l'ouverture passe
 /// une durée plus courte. Aucun réseau ni montant.
+///
+/// Un versement de 2 000 FCFA vaut **20 cauris** (1 cauri = 100 FCFA) : ils
+/// tombent **individuellement** dans la tirelire, en cadence serrée, sans
+/// badge multiplicateur « ×20 ». La durée totale reste de 3 secondes quel que
+/// soit le montant ; au-delà de [maxVisibleCauris], la file est plafonnée pour
+/// rester fluide (aucun compteur textuel n'est ajouté).
 /// Si « Réduire les animations » est actif, l'image finale est affichée
 /// directement et [onCompleted] est appelé sans mouvement.
 class CauriDropAnimation extends StatefulWidget {
@@ -40,6 +46,13 @@ class CauriDropAnimation extends StatefulWidget {
   final int cauriCount;
   final bool playSound;
 
+  /// Nombre maximal de cauris dessinés en même temps.
+  ///
+  /// Les montants courants (20 cauris pour 2 000 FCFA) sont rendus un par un.
+  /// Au-delà de ce plafond, la chute reste fluide sur les appareils modestes ;
+  /// aucun multiplicateur texte n'est affiché pour autant.
+  static const int maxVisibleCauris = 60;
+
   @override
   State<CauriDropAnimation> createState() => _CauriDropAnimationState();
 }
@@ -54,7 +67,6 @@ class _CauriDropAnimationState extends State<CauriDropAnimation>
   bool _notified = false;
 
   static const double _slotRatio = 0.46;
-  static const double _impact = 0.66;
 
   @override
   void didChangeDependencies() {
@@ -103,6 +115,16 @@ class _CauriDropAnimationState extends State<CauriDropAnimation>
     final double landedTop = size * _slotRatio - cauriHeight / 2;
     final double startTop = -cauriHeight - size * 0.04;
 
+    // File de cauris : chacun a sa propre chute, tous dans la même fenêtre de
+    // 3 s. L'espacement se resserre quand le nombre grandit, pour que le
+    // dernier cauri soit rentré avant le message d'encouragement.
+    final int total = widget.cauriCount < 1 ? 1 : widget.cauriCount;
+    final int visible = math.min(total, CauriDropAnimation.maxVisibleCauris);
+    final double stagger = visible <= 1
+        ? 0
+        : math.min(0.030, 0.55 / (visible - 1));
+    final double firstImpact = 0.05 + 0.20;
+
     return SizedBox(
       width: size,
       height: size,
@@ -111,25 +133,12 @@ class _CauriDropAnimationState extends State<CauriDropAnimation>
         builder: (BuildContext context, Widget? _) {
           final double t = _controller.value;
 
-          // Chute : accélération continue, comme une pièce qui tombe.
-          final double fall = ((t - 0.10) / (_impact - 0.10)).clamp(0.0, 1.0);
-          final double eased = Curves.easeInCubic.transform(fall);
-          final double dropTop = lerpDouble(startTop, landedTop, eased)!;
-
-          // Le cauri s'estompe en entrant dans la fente.
-          final double sink = ((t - _impact) / 0.16).clamp(0.0, 1.0);
-          final double cauriOpacity = t < 0.08
-              ? (t / 0.08).clamp(0.0, 1.0)
-              : (1 - sink).clamp(0.0, 1.0);
-          final double cauriScale = 1 - 0.62 * sink;
-          final double rotation = -0.30 + 0.36 * eased;
-
           // Impact : halo ocre, léger écrasement de la tirelire, éclat.
-          final double hit = ((t - _impact) / 0.20).clamp(0.0, 1.0);
+          final double hit = ((t - firstImpact) / 0.20).clamp(0.0, 1.0);
           final double squash = hit > 0 && hit < 1
               ? 1 + 0.05 * math.sin(hit * math.pi)
               : 1.0;
-          final double ring = ((t - _impact) / 0.24).clamp(0.0, 1.0);
+          final double ring = ((t - firstImpact) / 0.24).clamp(0.0, 1.0);
 
           // Repos : la tirelire respire doucement jusqu'à la fin.
           final double breathe = t > 0.86
@@ -185,63 +194,17 @@ class _CauriDropAnimationState extends State<CauriDropAnimation>
                   ),
                 ),
               ),
-              Positioned(
-                top: dropTop,
-                child: Opacity(
-                  opacity: cauriOpacity.clamp(0.0, 1.0),
-                  child: Transform.rotate(
-                    angle: rotation,
-                    child: Transform.scale(
-                      scale: cauriScale,
-                      child: Image.asset(
-                        'assets/brand/cauri.png',
-                        width: cauriWidth,
-                        height: cauriHeight,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.high,
-                        isAntiAlias: true,
-                        errorBuilder:
-                            (
-                              BuildContext context,
-                              Object error,
-                              StackTrace? stack,
-                            ) => Icon(
-                              Icons.spa_rounded,
-                              size: cauriHeight,
-                              color: c.ochre,
-                            ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              if (widget.cauriCount > 1)
-                Positioned(
-                  top: size * 0.08,
-                  right: size * 0.06,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: c.terracotta,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 9,
-                        vertical: 5,
-                      ),
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          '×${widget.cauriCount}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+              for (int i = 0; i < visible; i++)
+                _fallingCauri(
+                  index: i,
+                  t: t,
+                  size: size,
+                  startTop: startTop,
+                  landedTop: landedTop,
+                  cauriHeight: cauriHeight,
+                  cauriWidth: cauriWidth,
+                  stagger: stagger,
+                  color: c.ochre,
                 ),
               if (hit > 0 && hit < 1)
                 Positioned(
@@ -258,6 +221,58 @@ class _CauriDropAnimationState extends State<CauriDropAnimation>
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// Un cauri de la file : départ échelonné, chute accélérée, disparition dans
+  /// la fente. Aucun compteur n'est affiché : c'est la chute elle-même qui
+  /// montre le nombre de cauris.
+  Widget _fallingCauri({
+    required int index,
+    required double t,
+    required double size,
+    required double startTop,
+    required double landedTop,
+    required double cauriHeight,
+    required double cauriWidth,
+    required double stagger,
+    required Color color,
+  }) {
+    final double begin = 0.05 + index * stagger;
+    final double fall = ((t - begin) / 0.20).clamp(0.0, 1.0);
+    final double eased = Curves.easeInCubic.transform(fall);
+    final double top = lerpDouble(startTop, landedTop, eased)!;
+    final double sink = ((fall - 0.82) / 0.18).clamp(0.0, 1.0);
+    final double opacity = fall <= 0 ? 0 : (1 - sink).clamp(0.0, 1.0);
+    final double scale = 1 - 0.62 * sink;
+    final double rotation = -0.30 + 0.36 * eased;
+    // Léger écart latéral en début de chute, resserré vers la fente.
+    final double offsetX = math.sin(index * 2.4) * size * 0.06 * (1 - eased);
+
+    return Positioned(
+      top: top,
+      left: size / 2 - cauriWidth / 2 + offsetX,
+      child: Opacity(
+        opacity: opacity.clamp(0.0, 1.0),
+        child: Transform.rotate(
+          angle: rotation,
+          child: Transform.scale(
+            scale: scale,
+            child: Image.asset(
+              'assets/brand/cauri.png',
+              key: ValueKey<String>('cauri-$index'),
+              width: cauriWidth,
+              height: cauriHeight,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.high,
+              isAntiAlias: true,
+              errorBuilder:
+                  (BuildContext context, Object error, StackTrace? stack) =>
+                      Icon(Icons.spa_rounded, size: cauriHeight, color: color),
+            ),
+          ),
+        ),
       ),
     );
   }

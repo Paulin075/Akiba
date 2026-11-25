@@ -116,10 +116,13 @@ abstract final class GoogleOAuthConfig {
     'https://www.googleapis.com/auth/drive.appdata',
   ];
 
-  /// Portée du flux de bureau : identité pour l'adresse + Drive applicatif.
+  /// Portée du flux de bureau : identité (adresse, prénom, nom) + Drive
+  /// applicatif. `profile` fait apparaître `given_name`/`family_name` dans
+  /// l'`id_token`, utilisés pour pré-remplir l'onboarding.
   static const List<String> scopes = <String>[
     'openid',
     'email',
+    'profile',
     'https://www.googleapis.com/auth/drive.appdata',
   ];
 

@@ -38,6 +38,8 @@ class DashboardScreen extends StatefulWidget {
     required this.themeId,
     required this.onThemeChanged,
     this.onSeeAllMovements,
+    this.onOpenSavings,
+    this.onOpenAssistant,
   });
 
   final AkibaStore store;
@@ -45,6 +47,12 @@ class DashboardScreen extends StatefulWidget {
   final AkibaThemeId themeId;
   final ValueChanged<AkibaThemeId> onThemeChanged;
   final VoidCallback? onSeeAllMovements;
+
+  /// Ouvre l'onglet Épargne du portefeuille (coffres déjà opérationnels).
+  final VoidCallback? onOpenSavings;
+
+  /// Ouvre l'assistant IA déjà implémenté (mêmes gestes que le cochon).
+  final VoidCallback? onOpenAssistant;
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -95,20 +103,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await next;
   }
 
-  void _notYet(String label, String phase) {
+  void _info(String message) {
     final AkibaColors c = AkibaColors.of(context);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(
-            AkibaL10n.tr('planned_in', <String, String>{
-              'label': label,
-              'phase': phase,
-            }),
-          ),
+          content: Text(message),
           backgroundColor: c.textPrimary,
-          duration: const Duration(seconds: 2),
+          duration: const Duration(seconds: 3),
         ),
       );
   }
@@ -125,7 +128,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _edit(TransactionLine line) async {
     final QuickEntryMode? mode = quickEntryModeFor(line.transaction);
     if (mode == null) {
-      _notYet('La modification de ce mouvement', 'Phase 5');
+      _info(
+        'Un mouvement d’épargne se gère depuis l’onglet Épargne du '
+        'portefeuille.',
+      );
       return;
     }
     await openQuickEntry(
@@ -222,7 +228,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   onEntry: () => _enter(QuickEntryMode.income),
                   onExpense: () => _enter(QuickEntryMode.expense),
                   onTransfer: () => _enter(QuickEntryMode.transfer),
-                  onSavings: () => _notYet('Coffre épargne', 'Phase 5'),
+                  onSavings:
+                      widget.onOpenSavings ??
+                      () => _info(
+                        'Vos coffres d’épargne sont dans l’onglet Épargne du '
+                        'portefeuille.',
+                      ),
                 ),
               ];
 
@@ -233,7 +244,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   masked: masked,
                   onSeeAll:
                       widget.onSeeAllMovements ??
-                      () => _notYet('Historique complet', 'Phase 5'),
+                      () => _info(
+                        'L’historique complet est dans l’onglet Mouvements du '
+                        'portefeuille.',
+                      ),
                   onEdit: _edit,
                   onDelete: _delete,
                 ),
@@ -312,7 +326,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           message: insight.message,
           highlight: insight.highlight,
           footnote: AkibaL10n.tr('ai_footnote'),
-          onTap: () => _notYet('Assistant IA', 'Phase 6'),
+          onTap:
+              widget.onOpenAssistant ??
+              () => _info(
+                'Appuyez longuement sur le cochon pour dicter ou demander à '
+                'l’assistant.',
+              ),
         ),
       ],
     );
