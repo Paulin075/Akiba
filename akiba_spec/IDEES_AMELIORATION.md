@@ -547,3 +547,23 @@ Le splash étant désormais blanc, vérifier sur appareil que le contraste du lo
 199. **Rythme adaptatif des cauris** : si la mesure montre des chutes d’images sur un appareil modeste, réduire encore le plafond visible ou passer à des sprites pré-rendus, en gardant les 3 secondes et le nombre exact dans le message final.
 200. **Aperçu du nom Google** : montrer dans l'étape Google un court libellé « profil récupéré » avec un bouton « utiliser un autre nom », pour rendre explicite la possibilité d'ajuster sans effacer.
 201. **Dépliage des notifications sur iOS** : vérifier que les messages longs restent lisibles dans le centre de notifications et, si besoin, raccourcir côté iOS tout en gardant le texte complet côté Android.
+
+
+## Complement Etape 32 - diagnostic IA
+
+Le panneau IA detecte automatiquement le fournisseur lorsqu une seule cle est configuree et que le fournisseur courant est sans cle. Le test de connexion affiche aussi la reponse reelle du modele.
+
+## 35. Suites possibles apres l'Etape 33
+
+202. **Detection du fournisseur par la forme de la cle** : reconnaitre les prefixes connus (Gemini `AIza…`, OpenRouter `sk-or-…`) pour presélectionner le fournisseur et reduire encore les clics, sans jamais valider la cle hors ligne.
+203. **Journal local des tests IA** : garder les cinq derniers diagnostics (date, fournisseur, modele, categorie d'echec, latence) sans URL ni secret, pour expliquer un echec recurrent sans redemander la cle.
+204. **Zoom PDF memorise** : conserver le facteur de zoom entre deux ouvertures du rapport (borne 1× a 50×) et proposer un double-tap pour revenir a l'echelle de lecture.
+205. **Nuance sonore adaptative** : si une chute de 60 cauris reste trop dense sur un appareil modeste, reduire le plafond de notes (sans changer la duree de 3 s ni le nombre reel de cauris dessines), et mesurer le resultat au lieu de le supposer.
+
+## 36. Pistes issues de l'Étape 33 — serveur multi-utilisateurs et IA
+
+206. **Quota par utilisateur côté serveur** : compter les envois par dossier et afficher la taille totale dans `/health`, sans jamais lire le contenu.
+207. **Restauration guidée de l'historique** : lister les 30 versions d'un utilisateur (`GET /backups`) et laisser choisir une date dans AKIBA.
+208. **Révocation d'un jeton à chaud** : relire les jetons sans recréer le conteneur (fichier monté, rechargé à chaque requête).
+209. **Diagnostic par fournisseur** : mémoriser date, modèle, catégorie d'échec et latence du dernier test de chaque fournisseur, sans URL ni secret.
+210. **Modèle recommandé par tâche** : proposer un modèle rapide pour la saisie et un plus capable pour les analyses, sans jamais envoyer de montant en mode masqué.

@@ -138,3 +138,16 @@ dossier Drive synchronisé de l'appareil.
   visuel) ; le chiffrement/déchiffrement repose sur `AesBox`, testé.
 - Les greffons natifs (`image_picker`, `url_launcher`) ne sont pas compilés sur
   ce poste : le mode développeur Windows (liens symboliques) reste absent.
+
+---
+
+## 7. Format de sortie de l'IA
+
+| Règle | Application |
+| --- | --- |
+| Un seul nettoyeur | `AiText` (`lib/core/ai/ai_text.dart`) est le seul endroit qui transforme une réponse de modèle en texte affichable ou imprimable |
+| Formats tolérés | objet JSON (`conseil_financier`, `avis`, `conseils`…), liste de conseils, fences ``` et Markdown |
+| Interdits à l'écran | accolades, guillemets JSON, astérisques Markdown, puces dupliquées |
+| Réponse vide | message explicite « hors format », jamais une carte vide |
+| Rapport PDF | l'avis du modèle est injecté tel quel (nettoyé) quand il est lisible ; le repli local ne sert qu'en cas d'absence ou d'erreur réelle |
+| Montants | jamais inventés par le nettoyeur ; seuls les montants déjà présents dans la réponse sont mis en gras |

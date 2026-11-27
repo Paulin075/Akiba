@@ -4,7 +4,10 @@ Dernière mise à jour : **25/11/2026** · Étapes **1.1 → 1.3** de la Phase 1
 **Étapes 4 → 11** (saisie rapide, portefeuille, analyses, profil, assistant IA /
 SMS / sauvegardes, onboarding E1→E11, animations, revue complète et
 configuration release, gestion de la clé IA et cascade de modèles, règles
-complètes des créances et dettes) terminées.
+complètes des créances et dettes) terminées. Les **Étapes 12 → 32** sont
+également livrées et documentées : profil, IA multi-fournisseurs, rapports PDF,
+sauvegardes Google / Home Lab, notifications complètes, cauris, onboarding
+Google, son de cauri, assistant qui discute et exécute, zoom PDF.
 
 Ce fichier est l'historique de ce qui est réellement codé et vérifié. Il est mis à
 jour après chaque modification, comme demandé dans
@@ -1790,7 +1793,7 @@ Vérifications : couvertes par les 162 tests ; la transition visuelle n'a pas é
 ## Étape 26 — Identité PDF, cauris, sauvegarde portable et permissions (24/11/2026)
 
 - L’en-tête PDF affiche le nom complet, la photo de profil locale si disponible, sinon un avatar circulaire à initiales. La photo est lue depuis son stockage AES-256-GCM local et n’est pas ajoutée à la sauvegarde ; le rapport conserve les montants en clair et les blocs tiers / créances / dettes restent isolés.
-- `SavingsProjection.cauriCountForAmount` applique `montant ~/ 100`, zéro pour les montants non positifs et minimum un cauri au-dessus de zéro. Le nombre reste exact pour les grands montants et apparaît en badge, sans prolonger l’animation de 3 secondes. Le son est un clic système via `SystemSound`; son indisponibilité ou le mode silencieux ne bloque pas l’animation.
+- `SavingsProjection.cauriCountForAmount` applique `montant ~/ 100`, zéro pour les montants non positifs et minimum un cauri au-dessus de zéro. Le nombre reste exact pour les grands montants (aucun badge textuel depuis l’Étape 31), sans prolonger l’animation de 3 secondes. Le son est le WAV embarqué joué à chaque impact avec un plan proportionnel ; son indisponibilité ne bloque pas l’animation.
 - Les nouvelles enveloppes version 3 utilisent PBKDF2-HMAC-SHA256 (120 000 itérations) sur le `sub` stable Google et le sel applicatif, avec un sel aléatoire de 16 octets dans l’en-tête. La clé calculée reste en mémoire. Les enveloppes version 2 `device-key` restent lisibles sur l’appareil qui possède leur clé historique.
 - Le diagnostic Home Lab renvoie les erreurs d’URL, TLS, délai, port et HTTP; la normalisation garde schéma, port et chemin de santé/API.
 - À l’activation d’un rappel, la demande système est déclenchée via le greffon Android (POST_NOTIFICATIONS sur Android 13+). Au retour à l’application, l’autorisation réelle est relue, le réglage miroir est rafraîchi et les rappels actifs sont reprogrammés sans nouvelle demande.
@@ -1914,3 +1917,154 @@ Vérification après précision du libellé du bouton : `flutter analyze` sans p
 **Vérifications** : `dart format lib test` (125 fichiers, 0 changement), `flutter analyze` — **No issues found!**, `flutter test --reporter compact` — **194 tests passés**.
 
 **Limites** : rendu réel des notifications, de la pluie de cauris et de l'écran Google non observé (aucun appareil connecté) ; un vrai compte Google reste nécessaire pour constater le pré-remplissage du prénom et du nom.
+
+---
+
+## Étape 32 — Retours terrain : son, réseau, suppression, démarrage, IA et PDF (25/11/2026) ✅
+
+| Point | Livré |
+| --- | --- |
+| Son des cauris | `assets/audio/cauri_drop.wav` (WAV embarqué) + `lib/core/audio/cauri_sound.dart` : lecture à **chaque impact** (comptage dans la timeline, plan proportionnel au nombre de cauris (jusqu a 10 nuances)), volume `1.0`, préchargement après la première image, aucune erreur silencieuse. « Réduire les animations » coupe aussi le son. `audioplayers` déclaré et `assets/audio/` ajouté à `pubspec.yaml`. |
+| Serveur de sauvegarde | Diagnostic Home Lab déjà branché (adresse normalisée, `GET` lecture seule, latence) ; `putRemote`/`fetchRemote` distinguent désormais **TLS (`HandshakeException`)**, `SocketException`, `TimeoutException` et erreur HTTP, avec messages explicites. |
+| Suppression « Dernières transactions » | La ligne est retirée localement (`_hidden`) avant l'écriture SQLite, le `Dismissible` ne termine plus sa propre animation : plus d'assertion éphémère. Échec → ligne restaurée + un seul message clair ; exception journalisée (type + pile courte). « Annuler (5 s) » réécrit la ligne. |
+| Démarrage ~1 s | La porte d'ouverture reste à `1 s` (`AkibaDurations.splash`) ; contrôle d'intégrité, photo, rappels, sauvegarde Home Lab, préchauffage des logos et son sont déplacés dans `addPostFrameCallback`. `main` ne garde que base, réglages, thème et verrou. |
+| Assistant IA | Nouveau `lib/core/ai/ai_finance_context.dart` : résumé local (soldes, budgets, coffres, créances/dettes, derniers mouvements), **sans chiffre** en mode masqué. Une phrase sans montant devient une **question conseillée** (réponse affichée, aucune écriture). Une phrase avec montant reste un ordre JSON (`action` : expense / income / transfer / savings / third_party / debt), relu et confirmé ; un transfert écrit deux lignes symétriques. |
+| PDF | Zoom tactile (`InteractiveViewer`, zoom tactile sans plafond fixe, déplacement une fois zoomé, bouton Réinitialiser) dans l'aperçu. La section du PDF devient **« Avis & analyse IA »** quand le modèle a répondu, sinon « Avis et conseils » (analyse locale déterministe). |
+
+**Vérifications** : `dart format lib test` (0 changement), `flutter analyze` — **No issues found!**, `flutter test` — **197 tests passés** (dont `test/ai_finance_context_test.dart`).
+
+**Limites** : son, zoom PDF et réponses IA non observés sur appareil ; le diagnostic réseau n'a pas été confronté à un vrai serveur Home Lab.
+
+
+### Complément Étape 32 — détection IA et réponse de test
+
+Le panneau IA sélectionne automatiquement le fournisseur lorsqu’une seule clé chiffrée est configurée et que le fournisseur courant n’en possède pas. En cas de plusieurs clés, le choix courant est conservé. Le test de connexion envoie une requête courte au modèle et affiche sa réponse dans le panneau; ce diagnostic ne consomme pas le quota quotidien. Vérification : `dart format` et `flutter analyze` réussis; cinq tests ciblés dans `test/ai_test_reply_test.dart` couvrent modèle, réponse et erreurs.
+
+### Complément du 26/11/2026 — clé sans endpoint, réponse sous « Tester », zoom et son
+
+| Point | Livré |
+| --- | --- |
+| Saisie de clé sans endpoint | Le champ d'adresse n'est plus demandé : `AiProviderSettings.baseUrl` résout l'endpoint par défaut du fournisseur en arrière-plan. L'adresse et le modèle restent disponibles dans « Réglages avancés (facultatif) », replié par défaut (`ExpansionTile` clé `ai-advanced-settings`). |
+| Activation immédiate | `activateAiProviderWithKey` (dans `ai_provider.dart`) enregistre le fournisseur et passe `ai_remote_enabled` à vrai dès qu'une clé est enregistrée. L'assistant, les ordres et la génération de rapport/PDF relisent ces réglages à chaque appel : aucun redémarrage ni manipulation cachée. Le masquage et l'interrupteur restent prioritaires (aucun appel en mode masqué). |
+| Réponse dans la carte du bouton | Nouveau `lib/features/assistant/ai_test_panel.dart`, inséré **juste sous le bouton « Tester »**, dans la même carte : titres « Réponse du modèle » / « Test de connexion », état « Test en cours… », réponse réelle ou erreur déjà catégorisée. Aucune URL, aucun corps brut, aucune clé. |
+| Sélection du modèle testé | `selectAiTestModel` : premier modèle Gemini encore présent dans le catalogue frais selon la priorité ; modèle configuré pour les fournisseurs compatibles OpenAI. Le modèle soumis est bien celui de cette sélection (`test/ai_test_reply_test.dart`). |
+| Erreurs réseau | `fetchAiTestReply` convertit tout échec en `AiFailureKind` (délai, réseau, clé refusée, quota, service, réponse illisible) ; `AiTestException.message` n'expose que la phrase utilisateur. |
+| Zoom PDF | Nouveau `lib/core/widgets/pinch_zoom.dart` (`PinchZoom`, `AkibaZoom.maxScale = 50`, marge de déplacement 160 dp) utilisé par l'aperçu du rapport : zoom au pincement jusqu'à 50×, panoramique une fois agrandi, bouton Réinitialiser. |
+| Équilibre sonore | `CauriSoundPlan` reste la source du son : densité (une note de plus tous les 4 cauris, plafond 10), cadence resserrée (`staggerFor`) et nuance progressive (0,72 → 1.0) avec alternance et accent final, sans saturation. `CauriDropAnimation` joue chaque note à son impact, hors mode « Réduire les animations ». |
+
+**Tests ajoutés** : `test/cauri_sound_test.dart` (densité, cadence, nuances bornées, impacts dans la timeline, absence de répétition mécanique), `test/pinch_zoom_test.dart` (échelle maxi ≥ 20 et 50, panoramique), `test/ai_settings_ui_test.dart` (sélection automatique du fournisseur, activation immédiate, panneau de test, absence de champ endpoint replié).
+
+**Vérifications** : `dart format lib test` propre, `flutter analyze` — **No issues found!**, tests ciblés — 38 passés, suite complète — **224 tests, tous passés**.
+
+**Limites** : le pincement réel, l'audibilité du son et la réponse d'un vrai fournisseur n'ont pas été observés sur appareil.
+
+---
+
+## Étape 33 — Serveur multi-utilisateurs, liste des modèles IA et réponse serveur fiable (26/11/2026) ✅
+
+### 1. Restauration serveur : fin du faux « Format de sauvegarde non reconnu »
+
+| Cause trouvée | Correction |
+| --- | --- |
+| Le serveur historique répondait **204 sans corps** quand aucune sauvegarde n'existait ; seul `404` était traité comme « rien à restaurer ». Le corps vide partait ensuite vers l'analyse JSON, puis vers `_checkEnvelope`, d'où le message trompeur. | `fetchRemote` traite désormais `404`, `204` **et** un `200` au corps vide comme « Aucune sauvegarde » (`null`), sans aucune analyse. |
+| `HttpClientRequest.write` encode en **latin1** quand le `Content-Type` n'a pas de charset : l'enveloppe (libellés accentués : tiers, catégories, réglages) partait en octets invalides, le serveur la recevait altérée et la rendait telle quelle. C'était la vraie corruption de format. | `putRemote` écrit `request.add(utf8.encode(jsonEncode(envelope)))`. L'enveloppe est identique à l'octet près à l'aller et au retour. |
+| Une réponse proxy (page web, JSON enveloppé, chaîne JSON) produisait le même message générique. | Nouveau `BackupService.decodeRemoteBackup` : corps vide → `null`, chaîne JSON redécodée, enveloppe rangée sous `backup` / `envelope` / `latest` / `data` dépliée, page web et JSON étranger → message explicite (« page web », « n'a pas renvoyé une sauvegarde AKIBA »), jamais « format non reconnu ». |
+| Le serveur renvoyait `octet-stream` et un fichier unique. | `GET /` et `/backup` renvoient l'enveloppe **brute** en `application/json`, `Cache-Control: no-store`, ou **404** motivé. |
+
+`LocalRestorePage` reste limitée à l'adresse et au jeton, normalise l'URL, cherche puis restaure automatiquement, et distingue maintenant « aucune sauvegarde pour ce jeton » d'une vraie erreur.
+
+### 2. `config_serveur/` — serveur multi-utilisateurs avec jetons dédiés
+
+Le dossier existant a été inspecté puis remplacé/complété (l'ancien `latest_backup.bin` unique et la route multipart ont disparu) :
+
+| Fichier | Contenu |
+| --- | --- |
+| `main.py` | FastAPI : `USER_TOKENS` au format `jeton:utilisateur,jeton2:utilisateur2` (repli `API_TOKEN` → utilisateur `default`), comparaison `secrets.compare_digest`, dossier par utilisateur `/data/backups/<utilisateur>/` avec `latest.json` + `history/` limité à 30 fichiers horodatés, écriture atomique, `GET/PUT /` et `/backup`, `GET /health` (utilisateur authentifié, présence et taille de la sauvegarde), `GET /ping` sans jeton pour le healthcheck, reprise automatique de l'ancien `latest_backup.bin` dans `default/latest.json`, validation `format == "akiba-backup"` en `PUT`. |
+| `requirements.txt` | `fastapi==0.115.6`, `uvicorn==0.34.0` uniquement. |
+| `Dockerfile` | `python:3.11-slim`, port 8080, `uvicorn --proxy-headers`. |
+| `docker-compose.yml` | `restart: unless-stopped` (redémarrage après reboot), `8080:8080`, volume `/DATA/AppData/akiba-backup/data:/data`, `USER_TOKENS` commenté avec deux exemples, healthcheck `/ping`. |
+| `README_INSTALLATION.md` | Placement des fichiers, génération d'un jeton par personne (`openssl rand -hex 32`), ajout d'un utilisateur, arborescence des dossiers, activation Docker au boot, tests `curl`, configuration dans AKIBA, dépannage. |
+| `commandes_activation.txt` | Toutes les commandes d'activation dans l'ordre (mkdir, jetons, `systemctl enable docker`, `docker compose up -d --build`, `ufw allow 8080/tcp`, tests, vérification après `reboot`). |
+
+### 3. Test IA : fin du « Le modèle a répondu hors format »
+
+| Cause | Correction |
+| --- | --- |
+| `HttpClientRequest.write` en latin1 rendait le prompt accentué invalide côté fournisseur (le corps JSON était corrompu dès l'envoi). | UTF-8 explicite (`request.headers.contentType = ContentType.json` + `request.add(utf8.encode(...))`) dans `_send` **et** `fetchAiTestReply`. Corrige aussi tous les appels de l'assistant. |
+| L'extraction ne lisait que `candidates[0].content.parts[].text` (Gemini) et `choices[0].message.content` (OpenAI). Les modèles à réflexion renvoient un `content` vide + `reasoning_content`, ou des parties `thought`, ou plusieurs candidats : tout cela finissait en « hors format ». | `extractAiText` tolérant : tous les candidats, parties `thought` ignorées, listes de parties, `reasoning_content` / `reasoning` / `text`, repli racine `text` / `output_text` / `response` / `content`. Un corps texte non JSON est accepté **pour le diagnostic seulement** (`allowPlainText`). Une réponse réellement vide reste une erreur catégorisée. |
+| Limite de jetons trop basse pour les modèles à réflexion. | `generationConfig.maxOutputTokens` (Gemini) et `max_tokens` (OpenAI-compatible) à 1024, dont 1024 pour le diagnostic. |
+| Le diagnostic pouvait être pris pour une consommation de quota. | Inchangé et vérifié : `fetchAiTestReply` ne reçoit aucun réglage et ne touche pas `AiQuota` (test dédié). |
+
+### 4. Réglages IA : liste déroulante de tous les modèles accessibles
+
+- La carte « Modèles et priorité » (cases à cocher + flèches) est remplacée par **« Modèle utilisé »** : un `DropdownButton` listant **tous** les modèles renvoyés par `models.list` du fournisseur avec la clé saisie (Gemini comme OpenAI-compatible), cache par fournisseur (`ai_models_cache_<fournisseur>`).
+- Repli propre : avant le premier chargement, la liste contient le modèle configuré, le modèle par défaut et le cache existant ; le catalogue se charge automatiquement à l'ouverture si une clé est enregistrée, et via « Actualiser la liste ».
+- Le modèle choisi est mémorisé (`ai_model_<fournisseur>`) et **c'est exactement lui** qui part dans `fetchAiTestReply`. Pour Gemini, il passe aussi en tête de `ai_model_priority` (cascade de secours conservée).
+- La détection automatique du fournisseur à l'ouverture est conservée (une seule clé → ce fournisseur, plusieurs clés → choix courant) et charge désormais sa liste de modèles.
+
+### 5. Sauvegarde automatique et HTTP local
+
+Vérifié sans modification : `AutoBackupCoordinator` (anti-rebond 3 s, canaux indépendants Google Drive / serveur local, `auto_backup_pending_at`, reprise par minuteur et sur `AppLifecycleState.resumed` dans `main.dart`), `test/auto_backup_test.dart` (échec hors ligne puis reprise), et `android:usesCleartextTraffic="true"` présent dans `AndroidManifest.xml`.
+
+### 6. Vérifications exécutées
+
+`dart format lib test` propre · `flutter analyze` — **No issues found!** · `flutter test` — **241 tests, tous passés** (224 → 241, dont 17 nouveaux : `test/backup_server_decode_test.dart`, `test/ai_reply_parsing_test.dart`, liste déroulante dans `test/ai_settings_ui_test.dart`) · `python -m py_compile config_serveur/main.py` sans erreur.
+
+**Limites** : aucun serveur CasaOS réel ni appareil Android joint pendant ce tour ; le conteneur n'a pas été construit (`docker build`) sur le poste ; la joignabilité d'une IP locale et le redémarrage réel après reboot restent à confirmer sur le serveur du porteur.
+
+### 7. Jeton unique partagé, utilisateurs toujours séparés (26/11/2026)
+
+- `SHARED_TOKEN` : **un seul jeton** pour tout le monde. Chaque personne écrit `JETON:son_nom` (ou `JETON/son_nom`) dans le champ « Jeton d'accès » d'AKIBA ; `authenticate` vérifie le jeton puis range la sauvegarde dans `data/backups/<nom>/`. Sans nom, tout va dans `default`.
+- `USER_TOKENS` reste disponible et accepte les deux formes : `jeton:utilisateur` (jeton dédié, sans nom à saisir) et `jeton` seul (partagé). `API_TOKEN` sert de repli partagé. `GET /health` renvoie `shared_token`.
+- `_same()` compare des octets UTF-8 : `secrets.compare_digest` lève `TypeError` sur du non-ASCII, ce qui donnait un 500 pour un nom accentué. `Amélie Durand` devient proprement `Am_lie_Durand`.
+- Application inchangée fonctionnellement : seuls les textes d'aide du champ jeton (`features/onboarding/local_restore_page.dart`, `features/backup/backup_center.dart`) mentionnent `JETON:mon_nom`.
+- Serveur réellement lancé (`SHARED_TOKEN=partage-test`, port 8098) : `/ping` 200 ; alice `404` avant `PUT`, puis enveloppe **identique octet pour octet** après ; bob `404` après le `PUT` d'alice ; jeton seul → `default` ; mauvais jeton `401` ; nom accentué accepté. Aucun fichier temporaire laissé (`config_serveur/` propre).
+- Rappel de sécurité documenté : le jeton partagé donne accès à tous les dossiers (contenu toujours chiffré AES-256-GCM), d'où l'option des jetons dédiés.
+
+### 8. 401 à la restauration et échecs du test IA expliqués (27/11/2026)
+
+**401 « Lecture impossible »** — le code seul ne disait pas quoi corriger.
+
+- `BackupService.fetchRemote` / `putRemote` lisent maintenant le corps de la réponse et reprennent le motif du serveur (`{"detail": …}`) : `Jeton manquant`, `Jeton invalide` ou `Aucun jeton configuré` s'affichent, avec la marche à suivre. Message dédié 401/403 : « Jeton refusé par le serveur… SHARED_TOKEN doit être identique et le conteneur recréé (`docker compose up -d`) ». Aucun jeton n'apparaît dans le message (`serverDetail`, borné, jamais un corps HTML).
+- Cause réelle côté application : le centre de sauvegarde utilisait **seulement** le jeton du coffre, même quand la personne venait de coller le bon jeton dans le champ. `_currentLabToken()` préfère la saisie, `_requireLabToken()` explique l'absence de jeton au lieu d'un 401 sec.
+- Cause réelle côté serveur : `docker restart` ne recharge pas les variables d'environnement. `clean_token()` ignore désormais les guillemets et espaces collés (`"jeton"`) et le nom peut être écrit `JETON : nom`. Les 401 du serveur portent un motif actionnable au lieu de « Jeton invalide. » seul.
+- Vérifié sur serveur réel (`SHARED_TOKEN="jeton-test"` avec guillemets, port 8099) : sans jeton → 401 « Jeton manquant » ; mauvais jeton → 401 « Jeton invalide » + aide ; `"jeton-test":awa` et `jeton-test : awa` acceptés ; `awa` en 200 après `PUT`, `mamadou` en 404 → isolation intacte.
+
+**Test IA : « n'a pas répondu à temps », puis « le service a renvoyé une erreur »**
+
+- Gemini signale une **clé refusée par `400 API_KEY_INVALID`**, pas 401 : tout `400` était classé « réponse hors format », donc la vraie cause restait invisible. `aiErrorText()` lit `error.message`, `error.status` et `details[].reason`, et `AiHttpException.kind` en déduit `auth`, `quota`, `model` ou `server`. Nouvelle catégorie `AiFailureKind.model` (« modèle introuvable »).
+- La clé part en en-tête `x-goog-api-key` (au lieu de `?key=`) : forme acceptée par les clés `AIza…` **et** par les nouvelles clés `AQ.…`, et la clé ne traîne plus dans l'URL ni dans les journaux réseau.
+- Délai du diagnostic porté de 8 s à **40 s** (un modèle à réflexion dépassait 8 s → faux « délai dépassé »), avec un second essai unique sur 5xx.
+- Le test ne condamne plus le modèle choisi : sur `model` ou `server`, les deux modèles suivants du catalogue sont essayés, celui qui répond est retenu et enregistré, et l'échec nomme les modèles testés.
+- Modèles de départ mis à jour (`gemini-flash-latest`, `gemini-flash-lite-latest`, 2.5 Flash/Pro) : les versions 1.5 sont retirées et répondaient 404. Modèle Gemini par défaut : `gemini-flash-latest`.
+- Vérifié par tests locaux (serveur HTTP réel en boucle locale) : `400 API_KEY_INVALID` → « clé refusée », `404` → « modèle introuvable », `429` → quota ; 46 tests ciblés passés, `flutter analyze` sans problème, `python -m py_compile` OK. La clé Gemini réelle et son quota n'ont pas été exercés ici.
+
+### 9. Format de sortie de l'IA et avis réel dans le PDF (27/11/2026)
+
+**Constat** : Gemini renvoyait un objet JSON (`{"conseil_financier": "…"}`) que
+l'assistant affichait tel quel, accolades comprises. Le même JSON, réduit à une
+seule ligne, faisait échouer `ReportAdvice.parse` (moins de deux lignes) : le
+PDF retombait silencieusement sur l'avis local, donc jamais l'avis réel du
+modèle.
+
+| Correctif | Détail |
+| --- | --- |
+| `lib/core/ai/ai_text.dart` (nouveau) | `AiText.blocks` / `plain` / `lines` : décode un objet JSON (première valeur texte trouvée), une liste, des fences ``` et du Markdown, puis rend des paragraphes et des puces nettoyées (guillemets, puces, espaces insécables, titres `#`). |
+| Assistant (`features/assistant/assistant_sheet.dart`) | La réponse passe par `AiText.plain` : plus d'accolades ni de guillemets JSON. Nouveau rendu `_AnswerText` (paragraphes aérés, puces avec pastille terracotta) et `_highlight` qui met les montants FCFA en gras. Une réponse vide affiche « Le modèle a répondu hors format… ». |
+| Rapport (`core/report/monthly_report.dart`) | `ReportAdvice.parse` lit la réponse via `AiText.lines`, accepte `avis`/`conseils` en JSON, le Markdown et le texte libre ; un paragraphe unique est découpé aux phrases pour retrouver un verdict puis des conseils. |
+| Consigne du rapport | Le prompt demande explicitement un objet JSON `{"avis": …, "conseils": […]}` (FR et EN). |
+| Délai | `AiTask.analysis` passe de 10 s à 18 s pour laisser au modèle le temps de répondre avant le repli local. |
+
+**Tests** : `test/ai_text_test.dart` (4 cas : JSON, fences, liste, Markdown),
+`test/monthly_report_test.dart` (une réponse JSON du modèle arrive telle quelle
+dans le PDF), `test/core_test.dart` (plage du délai d'analyse 8–20 s).
+
+**Vérifications** : `dart format lib test` propre · `flutter analyze` — *No
+issues found!* · `flutter test test/ai_text_test.dart test/monthly_report_test.dart
+test/core_test.dart` — 65 tests passés · `flutter build apk --debug` —
+`BUILD_EXIT=0`, APK installé (`adb install -r`) et application relancée sans
+`FATAL` / `E/Flutter` dans logcat.
+
+**Limites** : le rendu réel de la carte conseil et de la carte « Avis & analyse
+IA » du PDF n'a pas été observé (aucune saisie synthétique dans l'application) ;
+une réponse Gemini réelle n'a pas été rejouée.

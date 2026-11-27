@@ -5,7 +5,7 @@ v2.0 + `akiba_animations_notifications_regles..txt`.
 
 Légende : ✅ fait · 🚧 en cours · ⬜ à faire · 🔒 dépend d'une décision ou d'un accès externe.
 
-> État au 20/11/2026 : les Étapes 1.1 → 1.3 puis 4 → 12 sont livrées et
+> État au 25/11/2026 : les Étapes 1.1 → 1.3 puis 4 → 32 sont livrées et
 > documentées ; la Phase 9 (release) est préparée mais **non compilée** faute de
 > mode développeur Windows sur le poste. Les règles du module IA et du module
 > Créances et dettes sont formalisées dans
@@ -620,3 +620,62 @@ Reste ouvert : rendu visuel de la transition et des messages non observé sur ap
 - Reste à vérifier sur appareil Android : notification longue réellement dépliée (bienvenue et rappel), pluie de 20 cauris et gros montant, absence de saccade sur un téléphone modeste.
 - Reste à vérifier avec un vrai compte Google : pré-remplissage du prénom et du nom sur Android (`displayName`) et sur ordinateur (`id_token` avec portée `profile`), puis saut effectif de l'étape manuelle. Un compte sans nom public gardera la saisie manuelle, ce qui est voulu.
 - Reste à faire si voulu : un compteur discret du nombre de cauris (texte accessible) pour les personnes malvoyantes, sans réintroduire de badge visuel permanent.
+
+---
+
+## Étape 32 — Son, réseau, suppression, démarrage, IA et PDF
+
+- Fait : son de cauri embarqué (`assets/audio/cauri_drop.wav`, `audioplayers`) joué **à chaque impact** (comptage dans la timeline, plan proportionnel au nombre de cauris (jusqu'à 10 nuances), volume progressif plafonné à 1.0), préchargé après la première image et coupé avec « Réduire les animations ». Erreurs audio journalisées, jamais silencieuses.
+- Fait : le client de sauvegarde distingue désormais certificat refusé (`HandshakeException`), serveur injoignable (`SocketException`), délai (`TimeoutException`), connexion interrompue (`HttpException`) et refus HTTP ; le diagnostic Home Lab existant (adresse normalisée, latence, test sans jeton) reste le point d'entrée.
+- Fait : la suppression dans « Dernières transactions » retire la ligne localement avant l'écriture SQLite, ne laisse plus `Dismissible` terminer sa propre animation (fin du message d'erreur fugitif), restaure la ligne en cas d'échec, journalise le type et une pile courte, et conserve « Annuler » 5 s.
+- Fait : l'ouverture reste à 1 s ; intégrité de la base, photo, rappels, sauvegarde Home Lab, préchauffage des logos et du son passent dans `addPostFrameCallback`. `main` ne garde que base chiffrée, réglages, thème et verrou.
+- Fait : l'assistant répond aux questions avec un résumé local (`ai_finance_context.dart`), sans aucun chiffre en mode masqué, et transforme un ordre en JSON (`expense`, `income`, `transfer`, `savings`, `third_party`, `debt`) relié aux services existants, toujours relu et confirmé. Le transfert écrit deux lignes symétriques.
+- Fait : zoom tactile jusqu'à 50× (`AkibaZoom`) dans l'aperçu PDF (déplacement une fois zoomé, bouton Réinitialiser) et section « Avis & analyse IA » quand le modèle a répondu, sinon « Avis et conseils » avec l'analyse locale.
+- Tests : `test/ai_finance_context_test.dart` ; `dart format lib test` propre, `flutter analyze` sans issue, suite complète — **197 tests passés**.
+- Reste à vérifier sur appareil : son réellement audible au premier impact, zoom PDF au doigt, réponse IA affichée, suppression par glissement sans message parasite.
+- Reste à vérifier avec un vrai serveur Home Lab et une vraie clé IA : messages TLS/HTTP, discussion chiffrée et exécution d'un ordre.
+- Reste à faire si voulu : un compteur accessible du nombre de cauris (idée 198) et une corbeille de suppression réversible (idée 206).
+
+### Etape 32 - complement IA
+
+- Fait : selection automatique du fournisseur si le fournisseur courant ne possede pas de cle et une seule cle fournisseur est configuree; si plusieurs cles existent, le choix courant reste inchange.
+- Fait : le test envoie une requete au modele selectionne (priorite Gemini disponible ou modele configure du fournisseur compatible) et affiche la reponse dans le panneau. Les erreurs sont reduites a des categories reseau, delai, quota, service ou format sans exposer URL, corps ou cle. Le diagnostic ne consomme pas le quota IA quotidien.
+- Tests cibles : `test/ai_test_reply_test.dart` (modele choisi, reponse, quota HTTP, delai et endpoint inaccessible).
+
+### Etape 33 - cle sans endpoint, reponse sous Tester, zoom et son (26/11/2026)
+
+- Fait : plus aucune saisie d'endpoint quand une cle est collee. L'adresse par defaut du fournisseur est resolue en arriere-plan ; l'adresse et le modele ne vivent plus que dans « Reglages avances (facultatif) », replies par defaut.
+- Fait : `activateAiProviderWithKey` memorise le fournisseur et active `ai_remote_enabled` des l'enregistrement de la cle. L'assistant, les ordres et le rapport/PDF la prennent en compte sans redemarrage. Le masquage reste prioritaire.
+- Fait : la reponse du modele (ou l'erreur categorisee) s'affiche dans la meme carte, juste sous le bouton « Tester », avec l'etat « Test en cours… » (`AiTestPanel`).
+- Fait : zoom au pincement jusqu'a 50× (`PinchZoom`, `AkibaZoom`) dans l'apercu PDF, panoramique une fois agrandi, bouton Reinitialiser.
+- Fait : son des cauris verifie par calcul pur : densite, cadence et nuance proportionnelles au nombre, plafond de 10 notes, volumes bornes a 1.0, impacts dans la duree de l'animation.
+- Tests : `test/cauri_sound_test.dart` (6), `test/pinch_zoom_test.dart` (2), `test/ai_settings_ui_test.dart` (9), plus les cinq tests existants de `test/ai_test_reply_test.dart` ; `dart format lib test` propre, `flutter analyze` sans issue, suite complete — **224 tests passes**.
+- Reste a verifier sur appareil : pincement reel sur l'apercu PDF (deux doigts), son audible au premier impact et sur une grosse chute, reponse d'une vraie cle API, et absence de blocage quand le reseau est coupe puis retabli.
+- Reste a verifier sur Android : serveur local en HTTP clair (192.168.x.x / 10.x.x.x / 127.0.0.1) — `usesCleartextTraffic="true"` est deja declare ; confirmer sur un telephone que l'IP locale est joignable et que la sauvegarde en attente repart au retour du Wi-Fi.
+
+## Règles transverses ajoutées le 26/11/2026
+
+| Règle | État |
+| --- | --- |
+| Restauration serveur : `404`, `204` et corps vide = « aucune sauvegarde », sans faux « format non reconnu » | ✅ (`fetchRemote`, `decodeRemoteBackup`, tests `backup_server_decode_test.dart`) |
+| Enveloppe serveur identique à l'octet près (UTF-8 explicite en `PUT`, corps brut en `GET`) | ✅ (tests locaux ; serveur réel non joint) |
+| Serveur `config_serveur/` multi-utilisateurs : un jeton → un dossier, `latest.json` + 30 historiques, `404` si vide, `GET /health` | ✅ (code livré ; `docker build` et déploiement à faire par le porteur) |
+| Jeton unique partagé (`SHARED_TOKEN`) : chaque personne écrit `JETON:son_nom` et garde son dossier ; jetons dédiés (`USER_TOKENS`) toujours possibles ; repli `API_TOKEN` | ✅ (vérifié sur serveur réel : 401/404/isolation/reprise des guillemets) |
+| Redémarrage automatique du serveur (`restart: unless-stopped`, `systemctl enable docker`) | ✅ (procédure documentée ; reboot réel non observé) |
+| Test IA sans faux « hors format » : raisonnement, plusieurs candidats, listes de parties, texte brut, `maxOutputTokens` | ✅ (tests `ai_reply_parsing_test.dart`) |
+| Erreurs IA classées par le corps du fournisseur : `400 API_KEY_INVALID` → « clé refusée », `404` → « modèle introuvable », `5xx` → second essai unique | ✅ (tests `ai_test_reply_test.dart`, `ai_provider_test.dart`) |
+| Clé Gemini en en-tête `x-goog-api-key` (clés `AIza…` et `AQ.…`), diagnostic à 40 s, reprise sur les deux modèles suivants | ✅ (code + tests ; clé réelle non exercée ici) |
+| 401 de restauration expliqué : motif du serveur affiché, jeton saisi utilisé même avant « Enregistrer et activer », guillemets/espaces tolérés côté serveur | ✅ (serveur réel en boucle locale + tests `backup_server_decode_test.dart`) |
+| Liste déroulante des modèles accessibles avec la clé, test sur le modèle sélectionné | ✅ (`ai_settings_sheet.dart`, test widget) |
+| Sauvegarde auto hors ligne : `auto_backup_pending_at` + reprise au retour au premier plan | ✅ (déjà couvert par `auto_backup_test.dart`) |
+| HTTP local Android (`usesCleartextTraffic="true"`, IP privées) | ✅ déclaré ; joignabilité sur téléphone à confirmer |
+| Zoom PDF (`AkibaZoom.maxScale = 50`) et son des cauris proportionnel (densité 1 note / 4 cauris, plafond 10) | ✅ alignés sur le code actuel |
+
+
+### Etape 34 - Format de sortie IA et avis reel dans le PDF (27/11/2026)
+
+- Fait : `AiText` decode JSON, listes, fences et Markdown ; l'assistant affiche des paragraphes et des puces, montants FCFA en gras, jamais l'objet brut.
+- Fait : `ReportAdvice.parse` accepte JSON (`avis`/`conseils`), Markdown et texte ; un paragraphe unique est decoupe aux phrases, donc le PDF recoit l'avis reel du modele au lieu du repli local.
+- Fait : consigne du rapport en JSON explicite (FR/EN) et delai d'analyse porte a 18 s.
+- Tests : `test/ai_text_test.dart`, `test/monthly_report_test.dart` (JSON du modele dans le PDF), plage de delai dans `test/core_test.dart` ; 65 tests cibles passes, `flutter analyze` sans issue, APK debug reconstruit et installe.
+- Reste a verifier sur appareil : carte conseil de l'assistant avec une vraie reponse Gemini, et carte « Avis & analyse IA » d'un PDF genere.

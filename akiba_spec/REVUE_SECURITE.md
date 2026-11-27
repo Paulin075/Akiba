@@ -1040,3 +1040,59 @@ Les notifications n'exposent toujours aucun montant : seul le texte du rappel ou
 | Cinq thèmes, barre basse non flottante, Home Lab sans serveur maître | ✅ Inchangé |
 | Affichage réel des notifications longues et de la pluie de cauris | 🔒 Appareil Android requis (aucun connecté) |
 | Pré-remplissage depuis un vrai compte Google | 🔒 Compte Google réel requis |
+
+
+## Complement Etape 32 - diagnostic IA
+
+La detection consulte uniquement la presence des valeurs chiffrees dans les reglages. Les secrets restent dans AiKeyVault et ne sont ni affiches ni journalises. La reponse de test est affichee dans le panneau. Cet appel distinct ne modifie pas le quota quotidien de l assistant.
+
+### Complement du 26/11/2026 — endpoint, panneau de test, zoom et son
+
+| Controle | Resultat |
+| --- | --- |
+| Aucun endpoint demande | L'URL par defaut du fournisseur est resolue localement ; le champ n'apparait que dans les reglages avances replies (`AiProviderSettings.normalizeBaseUrl` refuse ftp et les hotes vides). |
+| Cle active immediatement | `activateAiProviderWithKey` ecrit le fournisseur et `ai_remote_enabled`, jamais la cle ailleurs que dans `AiKeyVault` (AES-256-GCM + cle maitresse systeme). Le masquage bloque toujours l'appel distant. |
+| Panneau de test | `AiTestPanel` n'affiche que la reponse texte ou `AiFailureKind.hint` ; aucune URL, aucun corps brut, aucun en-tete, aucune cle. Les erreurs HTTP sont reduites a une categorie (dont 401/403 = cle refusee, 429 = quota). |
+| Quota | `fetchAiTestReply` est un diagnostic distinct : il ne touche pas `AiQuota`. |
+| Zoom | `AkibaZoom.maxScale = 50` reste une valeur finie : pas de matrice infinie ni de debordement, panoramique borne a 160 dp. |
+| Son | Plan pur, volumes bornes a 1.0 (aucune saturation) ; le son est coupe avec « Reduire les animations » et aucune donnee n'est envoyee. |
+| Sauvegarde auto | En attente hors ligne (`auto_backup_pending_at`), reprise au retour au premier plan et par minuteur ; aucun detail d'URL ou de jeton n'est remonte dans l'interface. |
+| Invariants | AES-256-GCM, masquage, rapport/PDF en clair, isolation tiers et dettes, cinq themes, barre basse non flottante, Home Lab seul : inchanges. |
+| Pincement, son et vraie cle sur appareil | 🔒 Appareil Android et cle API reelle requis |
+
+Verification automatisee du tour : `dart format lib test` propre, `flutter analyze` — **No issues found!**, `flutter test` — **224 tests passes** (dont 17 nouveaux sur le son, le zoom et le panneau de test). Les tests ne remplacent pas un essai sur appareil du pincement, du son et d'une vraie cle.
+
+### Complément du 26/11/2026 — serveur multi-utilisateurs et réponses IA
+
+| Controle | Resultat |
+| --- | --- |
+| Un jeton = un dossier | Nom de dossier nettoyé (lettres, chiffres, `-`, `_`), `..` et vide ramenés à `default` ; comparaison `secrets.compare_digest`. |
+| Aucune fuite entre utilisateurs | Chaque route dérive le dossier du **jeton authentifié** ; aucun nom d'utilisateur accepté depuis le corps ou l'URL. |
+| Enveloppe jamais déchiffrée ni modifiée | `PUT` valide seulement `format == "akiba-backup"` et stocke les octets bruts ; `GET` les rend tels quels ; aucun contenu journalisé. |
+| Erreurs sans fuite | `404` générique, `401` sans indice sur le jeton attendu, `/ping` sans donnée. |
+| Robustesse | Écriture atomique (`os.replace`), historique borné à 30 fichiers, corps limité à 32 Mio. |
+| Corps vide / 404 / 204 | Traités comme « aucune sauvegarde » : plus d'analyse JSON d'un corps vide ni de faux message de format. |
+| Encodage | `PUT` serveur et appels IA en UTF-8 explicite : plus de corps latin1 invalide (cause du format corrompu et du « hors format »). |
+| Réponse IA affichée | Uniquement du texte : ni URL, ni corps brut, ni en-tête, ni clé ; les échecs restent des catégories. |
+| Quota | `fetchAiTestReply` ne touche pas `AiQuota` (test dédié). |
+| Invariants | AES-256-GCM, masquage, rapport/PDF en clair, isolation tiers et dettes, cinq thèmes, barre basse non flottante, Home Lab seul : inchangés. |
+| Serveur CasaOS réel, `docker build`, reboot et appareil Android | 🔒 Non joints pendant ce tour |
+
+Vérification automatisée : `dart format lib test` propre, `flutter analyze` — **No issues found!**, `flutter test` — **241 tests passés**, `python -m py_compile config_serveur/main.py` sans erreur.
+
+---
+
+## 27. Nettoyage des réponses IA (27/11/2026)
+
+`AiText` ne lit que la réponse du modèle déjà reçue : aucun appel réseau, aucune
+clé, aucun jeton, aucune donnée financière supplémentaire. Le nettoyage ne
+modifie ni les montants ni les soldes ; il retire uniquement la syntaxe
+(accolades, guillemets, Markdown, fences) avant affichage et avant l'injection
+dans le PDF. En mode masqué, l'assistant ne fait toujours aucun appel distant.
+
+| Contrôle | Résultat |
+| --- | --- |
+| Aucun accès réseau ni au coffre dans `AiText` | ✅ lecture de code |
+| Montants non recalculés, non inventés | ✅ tests |
+| PDF : avis du modèle injecté quand il est lisible | ✅ test (`monthly_report_test.dart`) |
+| Rendu visuel réel assistant / PDF | 🔒 à vérifier sur appareil |
