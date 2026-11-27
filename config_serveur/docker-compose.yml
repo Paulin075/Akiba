@@ -1,0 +1,37 @@
+services:
+  akiba-backup:
+    build: .
+    container_name: akiba-backup
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # UN SEUL JETON POUR TOUT LE MONDE (le plus simple).
+      # Chaque personne écrit  JETON:son_nom  dans le champ « Jeton d'accès »
+      # d'AKIBA (ex. 9f2c…:mamadou) et obtient son propre dossier :
+      #   /DATA/AppData/akiba-backup/data/backups/mamadou/
+      # Sans nom (jeton seul), tout va dans data/backups/default/.
+      # Générez la valeur avec : openssl rand -hex 32
+      SHARED_TOKEN: "REMPLACER_PAR_UN_JETON_UNIQUE"
+      # Gardez cette valeur secrète : elle donne accès à tous les dossiers.
+      # ---- Facultatif : jetons dédiés, un par personne ----
+      # "jeton:utilisateur,jeton2:utilisateur2" remplace alors la saisie d'un
+      # nom (chaque jeton ouvre directement son dossier). Les deux formes
+      # peuvent cohabiter.
+      # USER_TOKENS: "JETON_ALICE:alice,JETON_BOB:bob"
+      # ---- Repli compatible (ancienne installation) ----
+      # API_TOKEN: "ancien_jeton_unique"
+      BACKUP_DIR: "/data/backups"
+      TZ: "Africa/Lome"
+    volumes:
+      - /DATA/AppData/akiba-backup/data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ping', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

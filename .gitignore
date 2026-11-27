@@ -58,3 +58,6 @@ client_secret_*.json
 /android/app/release
 /android/build/
 /android/.gradle/
+
+# Données locales du serveur de sauvegarde (jamais versionnées)
+config_serveur/data/

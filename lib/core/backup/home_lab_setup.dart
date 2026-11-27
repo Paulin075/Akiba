@@ -2,9 +2,9 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../data/akiba_store.dart';
 import '../state/akiba_settings.dart';
+import 'backup_code.dart';
 import 'backup_service.dart';
 import 'google_account.dart';
-import 'google_drive_backup.dart';
 
 /// Coffre du jeton Home Lab.
 ///
@@ -100,16 +100,22 @@ class HomeLabSetup {
     required this.service,
     required this.settings,
     LabTokenStore? tokens,
-  }) : tokens = tokens ?? const SecureLabTokenStore();
+    BackupCodeStore? codes,
+  }) : tokens = tokens ?? const SecureLabTokenStore(),
+       codes = codes ?? const SecureBackupCodeStore();
 
   final BackupService service;
   final AkibaSettings settings;
   final LabTokenStore tokens;
 
+  /// Code à 4 chiffres qui protège la sauvegarde du serveur.
+  final BackupCodeStore codes;
+
   HomeLabStep _step = HomeLabStep.address;
   String _url = '';
   bool _reachable = false;
   bool _tokenSaved = false;
+  bool _codeSaved = false;
   Duration? _latency;
   HomeLabSetupResult? _last;
 
@@ -123,6 +129,9 @@ class HomeLabSetup {
 
   /// Vrai quand un jeton est déjà enregistré dans le coffre.
   bool get tokenSaved => _tokenSaved;
+
+  /// Vrai quand un code à 4 chiffres est déjà enregistré dans le coffre.
+  bool get codeSaved => _codeSaved;
 
   /// Latence du dernier test réussi.
   Duration? get latency => _latency;
@@ -142,6 +151,7 @@ class HomeLabSetup {
     await migrateLegacyLabToken(settings, tokens);
     _url = settings.labUrl.trim();
     _tokenSaved = (await tokens.read()).isNotEmpty;
+    _codeSaved = isValidBackupCode(await codes.read());
     _step = _url.isEmpty
         ? HomeLabStep.address
         : (_tokenSaved ? HomeLabStep.ready : HomeLabStep.token);
@@ -155,8 +165,19 @@ class HomeLabSetup {
     return _tokenCache;
   }
 
-  /// Étape 1 — teste la joignabilité réelle du serveur, sans jeton.
-  Future<HomeLabSetupResult> testAddress(String rawUrl) async {
+  /// Lit le code de sauvegarde courant dans le coffre (jamais en clair dans
+  /// les réglages ni dans les messages).
+  Future<String> currentCode() async => normalizeBackupCode(await codes.read());
+
+  /// Étape 1 — teste la joignabilité réelle du serveur.
+  ///
+  /// Sans [token], c'est une lecture seule anonyme. Avec le jeton déjà saisi
+  /// ou enregistré, le test vérifie aussi l'authentification : un 401 affiche
+  /// alors le motif exact renvoyé par le serveur.
+  Future<HomeLabSetupResult> testAddress(
+    String rawUrl, {
+    String token = '',
+  }) async {
     final String? normalized = BackupService.normalizeUrl(rawUrl);
     if (normalized == null) {
       return _fail(
@@ -167,7 +188,7 @@ class HomeLabSetup {
     }
     final HomeLabProbe probe = await service.probeRemote(
       url: normalized,
-      token: '',
+      token: token,
     );
     _url = normalized;
     _latency = probe.latency;
@@ -180,8 +201,9 @@ class HomeLabSetup {
     // utilise exactement l'URL testée.
     await settings.set('lab_url', normalized);
     _step = HomeLabStep.token;
+    // Sans jeton, un 401 est normal : le serveur répond avant l'étape 2.
     final HomeLabSetupResult result = HomeLabSetupResult(
-      ok: true,
+      ok: probe.authenticated || token.trim().isEmpty,
       message: probe.message,
       latency: probe.latency,
     );
@@ -191,7 +213,10 @@ class HomeLabSetup {
 
   /// Étape 2 — vérifie le jeton, l'enregistre dans le coffre puis arme la
   /// sauvegarde automatique (et envoie immédiatement une sauvegarde).
-  Future<HomeLabSetupResult> activateToken(String rawToken) async {
+  Future<HomeLabSetupResult> activateToken(
+    String rawToken, {
+    String code = '',
+  }) async {
     final String token = rawToken.trim();
     if (token.isEmpty) {
       return _fail(
@@ -218,6 +243,22 @@ class HomeLabSetup {
     if (!probe.authenticated) {
       return _fail(probe.message, step: HomeLabStep.token);
     }
+    final String typedCode = normalizeBackupCode(code);
+    final String storedCode = await currentCode();
+    final String backupCode = typedCode.isEmpty ? storedCode : typedCode;
+    if (backupCode.isEmpty) {
+      return _fail(
+        'Choisissez un code de sauvegarde à 4 chiffres : il sera demandé pour '
+        'restaurer vos données sur un autre appareil, sans compte Google.',
+        step: HomeLabStep.token,
+      );
+    }
+    if (!isValidBackupCode(backupCode)) {
+      return _fail(
+        'Le code de sauvegarde doit comporter exactement 4 chiffres.',
+        step: HomeLabStep.token,
+      );
+    }
     try {
       await tokens.write(token);
     } catch (_) {
@@ -228,6 +269,16 @@ class HomeLabSetup {
     }
     _tokenCache = token;
     _tokenSaved = true;
+    try {
+      await codes.write(backupCode);
+      _codeSaved = true;
+    } catch (_) {
+      return _fail(
+        'Le code de sauvegarde n’a pas pu être protégé dans le coffre du '
+        'système.',
+        step: HomeLabStep.token,
+      );
+    }
     await settings.set('lab_url', _url);
     await settings.setFlag(HomeLabAutoBackup.flag, true);
 
@@ -235,6 +286,7 @@ class HomeLabSetup {
       service: service,
       settings: settings,
       tokens: tokens,
+      codes: codes,
     );
     String suffix;
     try {
@@ -247,8 +299,10 @@ class HomeLabSetup {
     final HomeLabSetupResult result = HomeLabSetupResult(
       ok: true,
       message:
-          'Jeton enregistré, sauvegarde automatique chiffrée activée '
-          '(toutes les ${HomeLabAutoBackup.minimumInterval.inHours} h).'
+          'Jeton et code à 4 chiffres enregistrés, sauvegarde automatique '
+          'chiffrée activée (toutes les '
+          '${HomeLabAutoBackup.minimumInterval.inHours} h). Ce code sera '
+          'demandé pour restaurer sur un autre appareil.'
           '$suffix',
       latency: probe.latency,
     );
@@ -276,7 +330,9 @@ class HomeLabAutoBackup {
     required this.service,
     required this.settings,
     LabTokenStore? tokens,
-  }) : tokens = tokens ?? const SecureLabTokenStore();
+    BackupCodeStore? codes,
+  }) : tokens = tokens ?? const SecureLabTokenStore(),
+       codes = codes ?? const SecureBackupCodeStore();
 
   /// Réglage marquant l'activation depuis la validation du jeton.
   static const String flag = 'lab_auto_backup';
@@ -287,6 +343,9 @@ class HomeLabAutoBackup {
   final BackupService service;
   final AkibaSettings settings;
   final LabTokenStore tokens;
+
+  /// Code à 4 chiffres du serveur : il chiffre chaque sauvegarde envoyée.
+  final BackupCodeStore codes;
 
   /// Envoie une sauvegarde chiffrée maintenant, avec le jeton du coffre.
   Future<bool> runNow({GoogleAccount account = GoogleAccount.none}) async {
@@ -300,9 +359,17 @@ class HomeLabAutoBackup {
         'Jeton Home Lab absent : ressaisissez-le à l’étape 2.',
       );
     }
+    final String code = normalizeBackupCode(await codes.read());
+    if (!isValidBackupCode(code)) {
+      throw const BackupException(
+        'Code de sauvegarde absent : définissez un code à 4 chiffres à l’étape 2 '
+        'du serveur Home Lab.',
+      );
+    }
     final Map<String, dynamic> envelope = await service.createEnvelope(
       deviceId: 'akiba-${settings.timezone}',
       account: account,
+      code: code,
     );
     await service.putRemote(url: url, token: token, envelope: envelope);
     await settings.set(
@@ -356,7 +423,8 @@ Future<void> migrateLegacyLabToken(
 /// Sauvegarde automatique Home Lab au démarrage, hors du chemin critique.
 ///
 /// Silencieuse par construction : sans serveur joignable, rien n'est affiché
-/// et l'application reste pleinement utilisable.
+/// et l'application reste pleinement utilisable. La clé vient du code à
+/// 4 chiffres du coffre : aucun compte Google n'est requis.
 Future<void> runLabAutoBackupOnStartup(
   AkibaStore store,
   AkibaSettings settings,
@@ -364,12 +432,12 @@ Future<void> runLabAutoBackupOnStartup(
   try {
     final LabTokenStore tokens = const SecureLabTokenStore();
     await migrateLegacyLabToken(settings, tokens);
-    final GoogleAccount account = await GoogleDriveService().currentAccount();
     await HomeLabAutoBackup(
       service: BackupService(store),
       settings: settings,
       tokens: tokens,
-    ).runIfDue(account: account);
+      codes: const SecureBackupCodeStore(),
+    ).runIfDue();
   } catch (_) {
     // Aucun blocage du démarrage.
   }

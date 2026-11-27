@@ -1,10 +1,9 @@
-import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show SystemSound, SystemSoundType;
 
+import '../audio/cauri_sound.dart';
 import '../theme/akiba_colors.dart';
 
 /// Animation signature AKIBA : le **cochon sans cauri** (la tirelire) reçoit le
@@ -66,28 +65,54 @@ class _CauriDropAnimationState extends State<CauriDropAnimation>
   bool _started = false;
   bool _notified = false;
 
+  /// Notes déjà jouées : le son suit la chute, sans jamais se superposer en
+  /// rafale ni répéter mécaniquement le même coup.
+  int _playedNotes = 0;
+  CauriSoundPlan? _plan;
+
   static const double _slotRatio = 0.46;
+
+  /// Chute d'un cauri, en fraction de la timeline.
+  static const double _fallSpan = CauriSoundPlan.fallSpan;
+
+  /// Espacement des départs : serré, mais jamais négatif pour un seul cauri.
+  static double staggerFor(int visible) => CauriSoundPlan.staggerFor(visible);
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_started) return;
     _started = true;
-    if (widget.playSound) {
-      // Son natif léger, sans asset ni plugin supplémentaire. Sur un appareil
-      // silencieux ou une plateforme qui ne le prend pas en charge, l'animation
-      // continue normalement.
-      unawaited(
-        SystemSound.play(SystemSoundType.click).catchError((Object _) {}),
-      );
-    }
     final bool reduced =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     if (reduced) {
+      // « Réduire les animations » coupe aussi le son : pas d'impact, pas de
+      // bruit soudain.
       _controller.value = 1;
       WidgetsBinding.instance.addPostFrameCallback((_) => _notify());
     } else {
+      if (widget.playSound) _controller.addListener(_handleImpacts);
       _controller.forward().whenComplete(_notify);
+    }
+  }
+
+  /// Joue le son **au moment exact** où chaque cauri atteint la fente.
+  ///
+  /// Le plan sonore est proportionnel au nombre de cauris : densité, cadence
+  /// et nuances augmentent avec la chute, et chaque note est jouée une seule
+  /// fois, avec son propre volume. Aucun plafond arbitraire de six lectures ne
+  /// vient couper une grosse chute au milieu du geste.
+  void _handleImpacts() {
+    if (!widget.playSound) return;
+    final CauriSoundPlan plan = _plan ??= CauriSoundPlan.forCount(
+      widget.cauriCount,
+    );
+    final double t = _controller.value;
+    while (_playedNotes < plan.notes.length &&
+        plan.notes[_playedNotes].at <= t) {
+      final CauriNote note = plan.notes[_playedNotes];
+      _playedNotes++;
+      CauriSound.play(volume: note.volume);
     }
   }
 
@@ -120,10 +145,8 @@ class _CauriDropAnimationState extends State<CauriDropAnimation>
     // dernier cauri soit rentré avant le message d'encouragement.
     final int total = widget.cauriCount < 1 ? 1 : widget.cauriCount;
     final int visible = math.min(total, CauriDropAnimation.maxVisibleCauris);
-    final double stagger = visible <= 1
-        ? 0
-        : math.min(0.030, 0.55 / (visible - 1));
-    final double firstImpact = 0.05 + 0.20;
+    final double stagger = staggerFor(visible);
+    const double firstImpact = CauriSoundPlan.start + _fallSpan;
 
     return SizedBox(
       width: size,
@@ -239,8 +262,8 @@ class _CauriDropAnimationState extends State<CauriDropAnimation>
     required double stagger,
     required Color color,
   }) {
-    final double begin = 0.05 + index * stagger;
-    final double fall = ((t - begin) / 0.20).clamp(0.0, 1.0);
+    final double begin = CauriSoundPlan.start + index * stagger;
+    final double fall = ((t - begin) / _fallSpan).clamp(0.0, 1.0);
     final double eased = Curves.easeInCubic.transform(fall);
     final double top = lerpDouble(startTop, landedTop, eased)!;
     final double sink = ((fall - 0.82) / 0.18).clamp(0.0, 1.0);

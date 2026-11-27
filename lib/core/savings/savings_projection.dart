@@ -27,6 +27,44 @@ abstract final class SavingsProjection {
     return accountBalance * bounded ~/ 100;
   }
 
+  /// Date d'atteinte d'un objectif à un rythme fixe (par exemple « 100 FCFA
+  /// par jour »), à partir du premier versement.
+  ///
+  /// Renvoie `null` si l'objectif est déjà atteint, absent, ou si le délai
+  /// dépasse [maxDays] (dix ans par défaut) : mieux vaut aucune date qu'une
+  /// promesse irréaliste. Le premier versement est compté le jour même de
+  /// [firstDeposit].
+  static DateTime? dateForDailyPlan({
+    required int target,
+    required int daily,
+    required DateTime firstDeposit,
+    int held = 0,
+    int maxDays = 3650,
+  }) {
+    if (target <= 0 || daily <= 0) return null;
+    final int remaining = target - held;
+    if (remaining <= 0) return null;
+    final int days = (remaining / daily).ceil();
+    if (days <= 0 || days > maxDays) return null;
+    return DateTime(
+      firstDeposit.year,
+      firstDeposit.month,
+      firstDeposit.day,
+    ).add(Duration(days: days - 1));
+  }
+
+  /// Nombre de versements nécessaires pour atteindre l'objectif.
+  static int depositsFor({
+    required int target,
+    required int daily,
+    int held = 0,
+  }) {
+    if (target <= 0 || daily <= 0) return 0;
+    final int remaining = target - held;
+    if (remaining <= 0) return 0;
+    return (remaining / daily).ceil();
+  }
+
   /// Date d'atteinte estimée au rythme observé depuis la création du coffre.
   ///
   /// Le rythme est le montant déjà épargné divisé par le nombre de jours

@@ -9,9 +9,13 @@ import 'package:speech_to_text/speech_to_text.dart';
 
 import '../../core/ai/ai_client.dart';
 import '../../core/ai/ai_command_parser.dart';
+import '../../core/ai/ai_finance_context.dart';
 import '../../core/ai/ai_quota.dart';
 import '../../core/ai/ai_remote.dart';
+import '../../core/ai/ai_text.dart';
+import '../../core/format/akiba_date.dart';
 import '../../core/savings/savings_messages.dart';
+import '../../core/savings/savings_projection.dart';
 import '../../core/state/akiba_settings.dart';
 import '../../core/format/akiba_money.dart';
 import '../../core/state/akiba_data_revision.dart';
@@ -92,6 +96,11 @@ class _AssistantSheetState extends State<_AssistantSheet> {
   final TextEditingController _amount = TextEditingController();
   final TextEditingController _note = TextEditingController();
 
+  /// Objectif d'épargne : nom du coffre et prix à atteindre. Le montant
+  /// quotidien reste dans `_amount`.
+  final TextEditingController _goalName = TextEditingController();
+  final TextEditingController _goalTarget = TextEditingController();
+
   late final Future<List<Account>> _accounts = widget.store.accounts();
   List<Account> _loaded = <Account>[];
   String? _accountId;
@@ -116,6 +125,13 @@ class _AssistantSheetState extends State<_AssistantSheet> {
   final SpeechToText _speech = SpeechToText();
   String _engineNote = 'Analyse locale';
   String? _message;
+
+  /// Compte crédité d'un transfert (le compte débité reste `_accountId`).
+  String? _toAccountId;
+
+  /// Réponse en langage naturel à une question sur la situation financière.
+  /// Elle n'écrit jamais en base : seule la carte d'opération le fait.
+  String? _answer;
 
   @override
   void initState() {
@@ -178,6 +194,8 @@ class _AssistantSheetState extends State<_AssistantSheet> {
     _text.dispose();
     _amount.dispose();
     _note.dispose();
+    _goalName.dispose();
+    _goalTarget.dispose();
     super.dispose();
   }
 
@@ -185,12 +203,9 @@ class _AssistantSheetState extends State<_AssistantSheet> {
     if (_analysing) return;
     final AiDraft? local = AiCommandParser.parse(_text.text);
     if (local == null) {
-      setState(() {
-        _message =
-            'Je n’ai pas trouvé de montant. Exemple : '
-            '« j’ai payé 5 000 pour le transport » ou '
-            '« Koffi me doit 5 000 ».';
-      });
+      // Pas de montant : c'est une question (« combien me reste-t-il ? »),
+      // pas un ordre. L'IA répond avec le résumé local, sans rien écrire.
+      await _discuss();
       return;
     }
 
@@ -198,6 +213,15 @@ class _AssistantSheetState extends State<_AssistantSheet> {
     // modèle ne peut le contredire. On applique la lecture locale.
     if (local.debtDirection != null) {
       _applyDraft(local, 'Analyse locale · créance / dette');
+      return;
+    }
+
+    // Objectif d'épargne récurrent : « 100 FCFA par jour pour un moniteur ».
+    // Le montant est un versement quotidien, jamais une dépense : la lecture
+    // locale est appliquée avant le modèle distant, qui l'avait comprise comme
+    // une sortie « Alimentation ».
+    if (local.isSavingsGoal) {
+      _applyDraft(local, 'Analyse locale · objectif d’épargne');
       return;
     }
 
@@ -214,6 +238,7 @@ class _AssistantSheetState extends State<_AssistantSheet> {
     setState(() {
       _analysing = true;
       _message = null;
+      _answer = null;
     });
     try {
       // Fournisseur choisi (Gemini, DeepSeek, OpenRouter, Home Lab / Ollama) :
@@ -241,9 +266,16 @@ class _AssistantSheetState extends State<_AssistantSheet> {
         transport: setup.transport,
         maxAttempts: widget.settings.aiMaxAttempts,
       );
+      // Le modèle reçoit la situation locale (soldes, budgets, coffres) pour
+      // lever toute ambiguïté et produire une action structurée fiable.
+      final AiFinanceSummary summary = await AiFinanceSummary.build(
+        widget.store,
+        masked: widget.masked,
+        language: widget.settings.language,
+      );
       final AiCallResult result = await client.generate(
         task: AiTask.quickEntry,
-        prompt: _remotePrompt(_text.text),
+        prompt: _remotePrompt(_text.text, summary),
       );
       if (!mounted) return;
       if (!result.ok) {
@@ -275,6 +307,15 @@ class _AssistantSheetState extends State<_AssistantSheet> {
           : (draft.note ?? _text.text);
       _neutral = draft.isNeutral;
       _debtDirection = draft.debtDirection;
+      if (draft.isSavingsGoal) {
+        _goalName.text = draft.goalName ?? 'Objectif';
+        _goalTarget.text = draft.targetAmount > 0
+            ? '${draft.targetAmount}'
+            : '';
+      } else {
+        _goalName.clear();
+        _goalTarget.clear();
+      }
       if (draft.debtDirection == null) {
         _settleMode = false;
         _debtId = null;
@@ -291,24 +332,132 @@ class _AssistantSheetState extends State<_AssistantSheet> {
             : _expenseCategories.first;
       }
       if (draft.fromBrand != null) {
-        for (final Account account in _loaded) {
-          if (account.brand.name == draft.fromBrand) _accountId = account.id;
-        }
+        _accountId = _matchAccount(draft.fromBrand!) ?? _accountId;
+      }
+      if (draft.toBrand != null) {
+        _toAccountId = _matchAccount(draft.toBrand!);
+      }
+      if (_kind == TransactionKind.transfer) {
+        _toAccountId ??= _firstOtherAccountId();
       }
       _engineNote = engine;
       _message = null;
+      _answer = null;
     });
   }
 
+  /// Question libre : réponse conseil, sans écriture.
+  Future<void> _discuss() async {
+    if (widget.masked) {
+      setState(() {
+        _message =
+            'Mode masqué : je ne lis ni n’envoie aucun montant. Désactivez le '
+            'masquage pour une analyse chiffrée, ou dictez une opération.';
+      });
+      return;
+    }
+    if (!widget.settings.aiRemoteEnabled) {
+      setState(() {
+        _message =
+            'Sans IA configurée, je ne peux pas discuter : dictez une opération '
+            '(« j’ai payé 5 000 pour le transport ») — l’analyse locale la '
+            'comprendra.';
+      });
+      return;
+    }
+
+    setState(() {
+      _analysing = true;
+      _message = null;
+      _answer = null;
+    });
+    try {
+      final AiRemoteResolution resolution = await resolveAiRemote(
+        widget.settings,
+        masked: widget.masked,
+      );
+      if (!mounted) return;
+      final AiRemoteSetup? setup = resolution.setup;
+      if (setup == null) {
+        setState(() => _message = resolution.note);
+        return;
+      }
+      final AiQuota quota = AiQuota(widget.settings);
+      if (!await quota.consume()) {
+        if (!mounted) return;
+        setState(() => _message = 'Quota du jour atteint : réessayez demain.');
+        return;
+      }
+      final AiFinanceSummary summary = await AiFinanceSummary.build(
+        widget.store,
+        masked: widget.masked,
+        language: widget.settings.language,
+      );
+      final AkibaAiClient client = AkibaAiClient(
+        models: setup.models,
+        transport: setup.transport,
+        maxAttempts: widget.settings.aiMaxAttempts,
+      );
+      final AiCallResult result = await client.generate(
+        task: AiTask.coaching,
+        prompt: _discussionPrompt(_text.text, summary),
+      );
+      if (!mounted) return;
+      if (!result.ok) {
+        setState(() => _message = result.note);
+        return;
+      }
+      // Le modèle répond souvent en JSON (`{"conseil_financier": "..."}`) :
+      // on n'affiche que la prose, jamais l'objet brut.
+      final String answer = AiText.plain(result.text!);
+      if (answer.isEmpty) {
+        setState(() {
+          _message =
+              'Le modèle a répondu hors format : reformulez la question en une '
+              'phrase.';
+        });
+        return;
+      }
+      setState(() {
+        _answer = answer;
+        _engineNote = '${setup.provider.label} · ${result.modelId}';
+        _message = null;
+      });
+    } finally {
+      if (mounted) setState(() => _analysing = false);
+    }
+  }
+
+  /// Consigne de discussion : le modèle conseille, il n'écrit jamais lui-même.
+  String _discussionPrompt(String text, AiFinanceSummary summary) =>
+      'Tu es le conseiller financier prudent d’AKIBA. Réponds en français, '
+      'en 120 mots maximum, en t’appuyant uniquement sur le résumé ci-dessous. '
+      'Ne propose jamais d’inventer un montant, ne dis jamais que l’argent de '
+      'tiers est un revenu, et rappelle qu’une action doit être confirmée '
+      'dans l’application. Si la question appelle une opération précise, '
+      'indique-la en une phrase commençant par « Dites : ».\n'
+      '${summary.toPrompt()}\nQuestion : ${jsonEncode(text)}';
+
   /// Consigne stricte : un seul objet JSON, aucune invention de montant.
-  String _remotePrompt(String text) =>
-      'Tu extrais une seule opération financière en FCFA depuis une phrase '
-      'française. Réponds uniquement par un objet JSON sans texte autour, '
-      'avec les clés : "amount" (entier positif), "kind" '
-      '("expense"|"income"|"transfer"), "category" (chaîne ou null), '
-      '"note" (chaîne courte), "neutral" (true si l’argent appartient à un '
-      'tiers), "confidence" (0 à 1). N’invente aucun montant : si la phrase '
-      'n’en contient pas, renvoie amount à 0.\nPhrase : ${jsonEncode(text)}';
+  String _remotePrompt(String text, AiFinanceSummary summary) {
+    final String accounts = _loaded
+        .map((Account a) => '${a.name} (${a.brand.label})')
+        .join(', ');
+    return 'Tu transformes une phrase française en UNE opération AKIBA, en '
+        'FCFA entiers. Réponds uniquement par un objet JSON, sans texte '
+        'autour, avec les clés : "action" '
+        '("expense"|"income"|"transfer"|"savings"|"savings_goal"|'
+        '"third_party"|"debt"), "amount" (entier positif), "account" (nom ou '
+        'support source), "to_account" (destination d’un transfert), "category" '
+        '(chaîne ou null), "note" (chaîne courte), "debtDirection" '
+        '("owedToMe"|"iOwe"|null), "daily_amount" et "target" (pour '
+        '"savings_goal" : versement quotidien et prix de l’objectif, 0 si '
+        'inconnu), "goal" (nom de l’objectif), "confidence" (0 à 1). '
+        'Un versement quotidien d’épargne n’est jamais une dépense. N’invente '
+        'aucun montant : si la phrase n’en contient pas, renvoie amount à 0.\n'
+        'Comptes disponibles : $accounts.\n${summary.toPrompt()}\n'
+        'Phrase : ${jsonEncode(text)}';
+  }
 
   /// Relit la réponse du modèle ; toute anomalie renvoie `null` (repli local).
   AiDraft? _readRemote(String raw, AiDraft local) {
@@ -325,12 +474,24 @@ class _AssistantSheetState extends State<_AssistantSheet> {
           ? amount
           : int.tryParse('${amount ?? ''}') ?? 0;
       if (value <= 0) return null;
-      final String kind = '${decoded['kind'] ?? 'expense'}'.toLowerCase();
+      final String action =
+          '${decoded['action'] ?? decoded['kind'] ?? 'expense'}'.toLowerCase();
+      final bool goalAction = action == 'savings_goal';
       final Object? category = decoded['category'];
+      final Object? goal = decoded['goal'];
+      final Object? target = decoded['target'];
+      final Object? daily = decoded['daily_amount'] ?? decoded['daily'];
       final Object? note = decoded['note'];
       final Object? confidence = decoded['confidence'];
+      final Object? from = decoded['account'] ?? decoded['from'];
+      final Object? to = decoded['to_account'] ?? decoded['to'];
+      final String? direction = switch ('${decoded['debtDirection']}') {
+        'owedToMe' => 'owedToMe',
+        'iOwe' => 'iOwe',
+        _ => action == 'debt' ? 'owedToMe' : null,
+      };
       return AiDraft(
-        kind: switch (kind) {
+        kind: switch (action) {
           'income' => TransactionKind.income,
           'transfer' => TransactionKind.transfer,
           _ => TransactionKind.expense,
@@ -342,10 +503,34 @@ class _AssistantSheetState extends State<_AssistantSheet> {
         note: note is String && note.trim().isNotEmpty
             ? note.trim()
             : local.note,
-        isNeutral: decoded['neutral'] == true || local.isNeutral,
+        isNeutral:
+            action == 'third_party' ||
+            decoded['neutral'] == true ||
+            local.isNeutral,
+        isSavings: action == 'savings' || goalAction || local.isSavings,
+        isSavingsGoal: goalAction || local.isSavingsGoal,
+        dailyAmount: goalAction
+            ? (daily is num
+                  ? daily.toInt()
+                  : int.tryParse('${daily ?? ''}') ?? value)
+            : local.dailyAmount,
+        goalName: goal is String && goal.trim().isNotEmpty
+            ? goal.trim()
+            : local.goalName,
+        targetAmount: target is num
+            ? target.toInt()
+            : int.tryParse('${target ?? ''}') ?? local.targetAmount,
+        debtDirection: direction,
+        counterparty: note is String && note.trim().isNotEmpty
+            ? note.trim()
+            : local.counterparty,
         occurredAt: local.occurredAt,
-        fromBrand: local.fromBrand,
-        toBrand: local.toBrand,
+        fromBrand: from is String && from.trim().isNotEmpty
+            ? from.trim()
+            : local.fromBrand,
+        toBrand: to is String && to.trim().isNotEmpty
+            ? to.trim()
+            : local.toBrand,
         confidence: confidence is num
             ? confidence.toDouble().clamp(0.0, 1.0)
             : 0.7,
@@ -379,6 +564,10 @@ class _AssistantSheetState extends State<_AssistantSheet> {
     }
     if (draft?.isSavings ?? false) {
       await _saveSavings(amount);
+      return;
+    }
+    if (_kind == TransactionKind.transfer) {
+      await _saveTransfer(amount);
       return;
     }
 
@@ -418,6 +607,97 @@ class _AssistantSheetState extends State<_AssistantSheet> {
         );
     } catch (_) {
       if (mounted) setState(() => _message = 'Enregistrement impossible.');
+    }
+  }
+
+  /// Premier compte différent du compte source, pour préremplir un transfert.
+  String? _firstOtherAccountId() {
+    for (final Account account in _loaded) {
+      if (account.id != _accountId) return account.id;
+    }
+    return null;
+  }
+
+  /// Retrouve un compte par support (« Flooz ») ou par nom (« Liquide »).
+  String? _matchAccount(String hint) {
+    final String needle = hint.trim().toLowerCase();
+    if (needle.isEmpty) return null;
+    for (final Account account in _loaded) {
+      if (account.brand.label.toLowerCase() == needle ||
+          account.brand.name.toLowerCase() == needle ||
+          account.name.toLowerCase() == needle) {
+        return account.id;
+      }
+    }
+    for (final Account account in _loaded) {
+      if (account.brand.name.toLowerCase().contains(needle) ||
+          account.name.toLowerCase().contains(needle)) {
+        return account.id;
+      }
+    }
+    return null;
+  }
+
+  /// Transfert entre deux comptes : deux écritures symétriques, comme la
+  /// saisie rapide, pour que les soldes et le total restent justes.
+  Future<void> _saveTransfer(int amount) async {
+    final String? from = _accountId;
+    final String? to = _toAccountId;
+    if (from == null || to == null || from == to) {
+      setState(() {
+        _message = 'Choisissez deux comptes différents pour le transfert.';
+      });
+      return;
+    }
+    final DateTime now = DateTime.now();
+    final int stamp = now.microsecondsSinceEpoch;
+    final String? note = _note.text.trim().isEmpty ? null : _note.text.trim();
+    final DateTime when = _draft?.occurredAt ?? now;
+    try {
+      await widget.store.saveTransaction(
+        TransactionRecord(
+          id: 'ai-$stamp-out',
+          accountId: from,
+          amount: -amount,
+          kind: TransactionKind.transfer,
+          note: note,
+          occurredAt: when,
+          createdAt: now,
+          transferAccountId: to,
+        ),
+      );
+      await widget.store.saveTransaction(
+        TransactionRecord(
+          id: 'ai-$stamp-in',
+          accountId: to,
+          amount: amount,
+          kind: TransactionKind.transfer,
+          note: note,
+          occurredAt: when,
+          createdAt: now,
+          transferAccountId: from,
+        ),
+      );
+      widget.revision.bump();
+      if (!mounted) return;
+      final NavigatorState navigator = Navigator.of(context);
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      navigator.pop();
+      HapticFeedback.lightImpact();
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Transfert enregistré : le total des comptes ne change pas.',
+            ),
+            duration: Duration(seconds: 3),
+          ),
+        );
+    } catch (error, stack) {
+      debugPrint('AKIBA : transfert impossible (${error.runtimeType}).');
+      debugPrintStack(stackTrace: stack, maxFrames: 6);
+      if (mounted) setState(() => _message = 'Transfert impossible.');
     }
   }
 
@@ -733,7 +1013,7 @@ class _AssistantSheetState extends State<_AssistantSheet> {
                                 ),
                               ),
                               Text(
-                                'Dites-moi ce qui s’est passé',
+                                'Une opération ou une question',
                                 style: AkibaTypography.sectionTitle.copyWith(
                                   fontSize: 18,
                                   color: c.textPrimary,
@@ -793,320 +1073,53 @@ class _AssistantSheetState extends State<_AssistantSheet> {
                         ),
                       ),
                     ],
-                    if (_draft != null) ...<Widget>[
-                      const SizedBox(height: AkibaSpacing.xl),
+                    if (_answer != null) ...<Widget>[
+                      const SizedBox(height: AkibaSpacing.lg),
                       Container(
                         padding: const EdgeInsets.all(AkibaSpacing.lg),
                         decoration: BoxDecoration(
                           color: c.surface,
                           borderRadius: BorderRadius.circular(AkibaRadii.card),
-                          boxShadow: c.cardShadow,
+                          border: Border.all(color: c.terracotta, width: 1.2),
                         ),
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: <Widget>[
                             Row(
                               children: <Widget>[
                                 Icon(
-                                  Icons.auto_awesome_rounded,
+                                  Icons.lightbulb_outline_rounded,
                                   size: 18,
                                   color: c.terracotta,
                                 ),
                                 const SizedBox(width: AkibaSpacing.sm),
                                 Expanded(
                                   child: Text(
-                                    'Carte de compréhension · à vérifier',
+                                    'Conseil · $_engineNote',
                                     style: AkibaTypography.label.copyWith(
                                       color: c.textMuted,
                                       letterSpacing: 0.6,
                                     ),
                                   ),
                                 ),
-                                Flexible(
-                                  child: Text(
-                                    '$_engineNote · '
-                                    '${_confidenceLabel(_draft!.confidence)}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.end,
-                                    style: AkibaTypography.legend.copyWith(
-                                      color: c.textMuted,
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: AkibaSpacing.md),
-                            if (_debtDirection != null) ...<Widget>[
-                              Container(
-                                padding: const EdgeInsets.all(AkibaSpacing.md),
-                                decoration: BoxDecoration(
-                                  color: c.iconTile,
-                                  borderRadius: BorderRadius.circular(
-                                    AkibaRadii.field,
-                                  ),
-                                ),
-                                child: Row(
-                                  children: <Widget>[
-                                    Icon(
-                                      _debtDirection == 'owedToMe'
-                                          ? Icons.call_received_rounded
-                                          : Icons.call_made_rounded,
-                                      size: 18,
-                                      color: c.terracotta,
-                                    ),
-                                    const SizedBox(width: AkibaSpacing.sm),
-                                    Expanded(
-                                      child: Text(
-                                        _settleMode
-                                            ? (_debtDirection == 'owedToMe'
-                                                  ? 'Règlement · '
-                                                        'l’encaissement entre '
-                                                        'sur le compte choisi '
-                                                        'et augmente le solde '
-                                                        'disponible.'
-                                                  : 'Règlement · le '
-                                                        'paiement sort du '
-                                                        'compte choisi et '
-                                                        'diminue le solde '
-                                                        'disponible.')
-                                            : (_debtDirection == 'owedToMe'
-                                                  ? 'Créance · on me doit. '
-                                                        'Tant qu’elle n’est '
-                                                        'pas encaissée, elle '
-                                                        'reste hors du solde '
-                                                        'disponible.'
-                                                  : 'Dette · je dois. Tant '
-                                                        'qu’elle n’est pas '
-                                                        'payée, elle reste '
-                                                        'hors du solde '
-                                                        'disponible.'),
-                                        style: AkibaTypography.legend.copyWith(
-                                          color: c.textMuted,
-                                          height: 1.4,
-                                        ),
-                                      ),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => setState(() {
-                                        _debtDirection = null;
-                                        _settleMode = false;
-                                        _debtId = null;
-                                        _kind = TransactionKind.expense;
-                                      }),
-                                      child: const Text('Changer'),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: AkibaSpacing.xs),
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: TextButton.icon(
-                                  onPressed: _toggleSettle,
-                                  icon: Icon(
-                                    _settleMode
-                                        ? Icons.close_rounded
-                                        : Icons.task_alt_rounded,
+                                IconButton(
+                                  tooltip: 'Effacer',
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () =>
+                                      setState(() => _answer = null),
+                                  icon: const Icon(
+                                    Icons.close_rounded,
                                     size: 18,
                                   ),
-                                  label: Text(
-                                    _settleMode
-                                        ? 'Annuler le règlement'
-                                        : (_debtDirection == 'owedToMe'
-                                              ? 'Cette créance a été encaissée'
-                                              : 'Cette dette a été payée'),
-                                  ),
-                                ),
-                              ),
-                              if (_settleMode) ...<Widget>[
-                                if (_matchingDebts.isEmpty)
-                                  Text(
-                                    'Aucune ${_debtDirection == 'owedToMe' ? 'créance' : 'dette'} '
-                                    'ouverte pour l’instant : enregistrez-la '
-                                    'd’abord sans règlement.',
-                                    style: AkibaTypography.legend.copyWith(
-                                      color: c.warning,
-                                    ),
-                                  )
-                                else
-                                  DropdownButtonFormField<String>(
-                                    initialValue: _selectedDebt?.id,
-                                    decoration: _field(c, 'Ligne à régler'),
-                                    items: <DropdownMenuItem<String>>[
-                                      for (final Debt item in _matchingDebts)
-                                        DropdownMenuItem<String>(
-                                          value: item.id,
-                                          child: Text(
-                                            '${item.counterparty} · '
-                                            '${AkibaMoney.format(item.remaining, masked: widget.masked)}',
-                                          ),
-                                        ),
-                                    ],
-                                    onChanged: (String? value) {
-                                      if (value == null) return;
-                                      for (final Debt item in _matchingDebts) {
-                                        if (item.id != value) continue;
-                                        setState(() {
-                                          _debtId = item.id;
-                                          _amount.text = '${item.remaining}';
-                                          _note.text = item.counterparty;
-                                        });
-                                      }
-                                    },
-                                  ),
-                              ],
-                            ],
-                            if (_debtDirection == null)
-                              SegmentedControl(
-                                segments: const <String>[
-                                  'Sortie',
-                                  'Entrée',
-                                  'Tiers',
-                                ],
-                                selectedIndex: _neutral
-                                    ? 2
-                                    : (_kind == TransactionKind.income ? 1 : 0),
-                                onChanged: (int index) => setState(() {
-                                  _debtDirection = null;
-                                  if (index == 2) {
-                                    _neutral = true;
-                                  } else {
-                                    _neutral = false;
-                                    _kind = index == 1
-                                        ? TransactionKind.income
-                                        : TransactionKind.expense;
-                                    _category = _kind == TransactionKind.income
-                                        ? _incomeCategories.first
-                                        : _expenseCategories.first;
-                                  }
-                                }),
-                              ),
-                            const SizedBox(height: AkibaSpacing.md),
-                            Row(
-                              children: <Widget>[
-                                Expanded(
-                                  child: TextField(
-                                    controller: _amount,
-                                    keyboardType: TextInputType.number,
-                                    inputFormatters: <TextInputFormatter>[
-                                      FilteringTextInputFormatter.digitsOnly,
-                                      LengthLimitingTextInputFormatter(9),
-                                    ],
-                                    decoration: _field(c, 'Montant'),
-                                  ),
-                                ),
-                                const SizedBox(width: AkibaSpacing.sm),
-                                Text(
-                                  'FCFA',
-                                  style: AkibaTypography.legend.copyWith(
-                                    color: c.textMuted,
-                                  ),
                                 ),
                               ],
-                            ),
-                            const SizedBox(height: AkibaSpacing.md),
-                            DropdownButtonFormField<String>(
-                              initialValue:
-                                  accountItems.any(
-                                    (Account a) => a.id == _accountId,
-                                  )
-                                  ? _accountId
-                                  : null,
-                              decoration: _field(
-                                c,
-                                _debtDirection != null
-                                    ? (_debtDirection == 'owedToMe'
-                                          ? 'Compte qui reçoit'
-                                          : 'Compte qui paie')
-                                    : 'Compte',
-                              ),
-                              items: <DropdownMenuItem<String>>[
-                                for (final Account account in accountItems)
-                                  DropdownMenuItem<String>(
-                                    value: account.id,
-                                    child: Text(
-                                      '${account.name} · ${account.brand.label}',
-                                    ),
-                                  ),
-                              ],
-                              onChanged: (String? value) =>
-                                  setState(() => _accountId = value),
-                            ),
-                            const SizedBox(height: AkibaSpacing.md),
-                            if (!_neutral &&
-                                _debtDirection == null &&
-                                _kind != TransactionKind.transfer)
-                              DropdownButtonFormField<String>(
-                                initialValue: safeCategory,
-                                decoration: _field(c, 'Catégorie'),
-                                items: <DropdownMenuItem<String>>[
-                                  for (final String category in categories)
-                                    DropdownMenuItem<String>(
-                                      value: category,
-                                      child: Text(category),
-                                    ),
-                                ],
-                                onChanged: (String? value) {
-                                  if (value != null) {
-                                    setState(() => _category = value);
-                                  }
-                                },
-                              ),
-                            const SizedBox(height: AkibaSpacing.md),
-                            TextField(
-                              controller: _note,
-                              decoration: _field(
-                                c,
-                                _debtDirection != null
-                                    ? 'Contact (ex. Koffi)'
-                                    : 'Note',
-                              ),
-                            ),
-                            const SizedBox(height: AkibaSpacing.md),
-                            Text(
-                              _debtDirection != null
-                                  ? _settleMode
-                                        ? (_debtDirection == 'owedToMe'
-                                              ? 'Le montant encaissé sera '
-                                                    'ajouté au compte choisi ; '
-                                                    'le reste dû diminue '
-                                                    'd’autant.'
-                                              : 'Le montant payé sera retiré '
-                                                    'du compte choisi ; le '
-                                                    'reste dû diminue d’autant.')
-                                        : 'La créance / dette sera '
-                                              'enregistrée sans mouvement de '
-                                              'trésorerie : elle reste hors '
-                                              'du solde disponible, du budget '
-                                              'et des statistiques.'
-                                  : _neutral
-                                  ? 'Argent de tiers : la ligne sera isolée du '
-                                        'solde disponible, du budget et des '
-                                        'statistiques.'
-                                  : _kind == TransactionKind.income
-                                  ? 'Entrée enregistrée sur le compte choisi.'
-                                  : 'Sortie enregistrée sur le compte choisi.',
-                              style: AkibaTypography.legend.copyWith(
-                                color: c.textMuted,
-                              ),
-                            ),
-                            const SizedBox(height: AkibaSpacing.lg),
-                            FilledButton.icon(
-                              onPressed: _save,
-                              icon: const Icon(Icons.check_rounded, size: 18),
-                              label: Text(
-                                _settleMode
-                                    ? 'Confirmer le règlement · '
-                                          '${_previewAmount()}'
-                                    : 'Confirmer · ${_previewAmount()}',
-                              ),
                             ),
                             const SizedBox(height: AkibaSpacing.xs),
+                            _AnswerText(text: _answer!, colors: c),
+                            const SizedBox(height: AkibaSpacing.sm),
                             Text(
-                              'Aucune écriture n’est faite avant ce bouton.',
-                              textAlign: TextAlign.center,
+                              'Aucune écriture : dictez l’opération pour la '
+                              'confirmer.',
                               style: AkibaTypography.legend.copyWith(
                                 color: c.textMuted,
                                 fontSize: 11,
@@ -1116,6 +1129,375 @@ class _AssistantSheetState extends State<_AssistantSheet> {
                         ),
                       ),
                     ],
+                    if (_draft != null) ...<Widget>[
+                      const SizedBox(height: AkibaSpacing.xl),
+                      if (_draft!.isSavingsGoal)
+                        _savingsGoalCard(c)
+                      else
+                        Container(
+                          padding: const EdgeInsets.all(AkibaSpacing.lg),
+                          decoration: BoxDecoration(
+                            color: c.surface,
+                            borderRadius: BorderRadius.circular(
+                              AkibaRadii.card,
+                            ),
+                            boxShadow: c.cardShadow,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: <Widget>[
+                              Row(
+                                children: <Widget>[
+                                  Icon(
+                                    Icons.auto_awesome_rounded,
+                                    size: 18,
+                                    color: c.terracotta,
+                                  ),
+                                  const SizedBox(width: AkibaSpacing.sm),
+                                  Expanded(
+                                    child: Text(
+                                      'Carte de compréhension · à vérifier',
+                                      style: AkibaTypography.label.copyWith(
+                                        color: c.textMuted,
+                                        letterSpacing: 0.6,
+                                      ),
+                                    ),
+                                  ),
+                                  Flexible(
+                                    child: Text(
+                                      '$_engineNote · '
+                                      '${_confidenceLabel(_draft!.confidence)}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.end,
+                                      style: AkibaTypography.legend.copyWith(
+                                        color: c.textMuted,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: AkibaSpacing.md),
+                              if (_debtDirection != null) ...<Widget>[
+                                Container(
+                                  padding: const EdgeInsets.all(
+                                    AkibaSpacing.md,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: c.iconTile,
+                                    borderRadius: BorderRadius.circular(
+                                      AkibaRadii.field,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: <Widget>[
+                                      Icon(
+                                        _debtDirection == 'owedToMe'
+                                            ? Icons.call_received_rounded
+                                            : Icons.call_made_rounded,
+                                        size: 18,
+                                        color: c.terracotta,
+                                      ),
+                                      const SizedBox(width: AkibaSpacing.sm),
+                                      Expanded(
+                                        child: Text(
+                                          _settleMode
+                                              ? (_debtDirection == 'owedToMe'
+                                                    ? 'Règlement · '
+                                                          'l’encaissement entre '
+                                                          'sur le compte choisi '
+                                                          'et augmente le solde '
+                                                          'disponible.'
+                                                    : 'Règlement · le '
+                                                          'paiement sort du '
+                                                          'compte choisi et '
+                                                          'diminue le solde '
+                                                          'disponible.')
+                                              : (_debtDirection == 'owedToMe'
+                                                    ? 'Créance · on me doit. '
+                                                          'Tant qu’elle n’est '
+                                                          'pas encaissée, elle '
+                                                          'reste hors du solde '
+                                                          'disponible.'
+                                                    : 'Dette · je dois. Tant '
+                                                          'qu’elle n’est pas '
+                                                          'payée, elle reste '
+                                                          'hors du solde '
+                                                          'disponible.'),
+                                          style: AkibaTypography.legend
+                                              .copyWith(
+                                                color: c.textMuted,
+                                                height: 1.4,
+                                              ),
+                                        ),
+                                      ),
+                                      TextButton(
+                                        onPressed: () => setState(() {
+                                          _debtDirection = null;
+                                          _settleMode = false;
+                                          _debtId = null;
+                                          _kind = TransactionKind.expense;
+                                        }),
+                                        child: const Text('Changer'),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: AkibaSpacing.xs),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    onPressed: _toggleSettle,
+                                    icon: Icon(
+                                      _settleMode
+                                          ? Icons.close_rounded
+                                          : Icons.task_alt_rounded,
+                                      size: 18,
+                                    ),
+                                    label: Text(
+                                      _settleMode
+                                          ? 'Annuler le règlement'
+                                          : (_debtDirection == 'owedToMe'
+                                                ? 'Cette créance a été encaissée'
+                                                : 'Cette dette a été payée'),
+                                    ),
+                                  ),
+                                ),
+                                if (_settleMode) ...<Widget>[
+                                  if (_matchingDebts.isEmpty)
+                                    Text(
+                                      'Aucune ${_debtDirection == 'owedToMe' ? 'créance' : 'dette'} '
+                                      'ouverte pour l’instant : enregistrez-la '
+                                      'd’abord sans règlement.',
+                                      style: AkibaTypography.legend.copyWith(
+                                        color: c.warning,
+                                      ),
+                                    )
+                                  else
+                                    DropdownButtonFormField<String>(
+                                      initialValue: _selectedDebt?.id,
+                                      decoration: _field(c, 'Ligne à régler'),
+                                      items: <DropdownMenuItem<String>>[
+                                        for (final Debt item in _matchingDebts)
+                                          DropdownMenuItem<String>(
+                                            value: item.id,
+                                            child: Text(
+                                              '${item.counterparty} · '
+                                              '${AkibaMoney.format(item.remaining, masked: widget.masked)}',
+                                            ),
+                                          ),
+                                      ],
+                                      onChanged: (String? value) {
+                                        if (value == null) return;
+                                        for (final Debt item
+                                            in _matchingDebts) {
+                                          if (item.id != value) continue;
+                                          setState(() {
+                                            _debtId = item.id;
+                                            _amount.text = '${item.remaining}';
+                                            _note.text = item.counterparty;
+                                          });
+                                        }
+                                      },
+                                    ),
+                                ],
+                              ],
+                              if (_debtDirection == null)
+                                SegmentedControl(
+                                  segments: const <String>[
+                                    'Sortie',
+                                    'Entrée',
+                                    'Transfert',
+                                    'Tiers',
+                                  ],
+                                  selectedIndex: _neutral
+                                      ? 3
+                                      : _kind == TransactionKind.transfer
+                                      ? 2
+                                      : (_kind == TransactionKind.income
+                                            ? 1
+                                            : 0),
+                                  onChanged: (int index) => setState(() {
+                                    _debtDirection = null;
+                                    _neutral = index == 3;
+                                    if (index == 2) {
+                                      _kind = TransactionKind.transfer;
+                                      _toAccountId ??= _firstOtherAccountId();
+                                    } else {
+                                      _kind = index == 1
+                                          ? TransactionKind.income
+                                          : TransactionKind.expense;
+                                      _category =
+                                          _kind == TransactionKind.income
+                                          ? _incomeCategories.first
+                                          : _expenseCategories.first;
+                                    }
+                                  }),
+                                ),
+                              const SizedBox(height: AkibaSpacing.md),
+                              Row(
+                                children: <Widget>[
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _amount,
+                                      keyboardType: TextInputType.number,
+                                      inputFormatters: <TextInputFormatter>[
+                                        FilteringTextInputFormatter.digitsOnly,
+                                        LengthLimitingTextInputFormatter(9),
+                                      ],
+                                      decoration: _field(c, 'Montant'),
+                                    ),
+                                  ),
+                                  const SizedBox(width: AkibaSpacing.sm),
+                                  Text(
+                                    'FCFA',
+                                    style: AkibaTypography.legend.copyWith(
+                                      color: c.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: AkibaSpacing.md),
+                              DropdownButtonFormField<String>(
+                                initialValue:
+                                    accountItems.any(
+                                      (Account a) => a.id == _accountId,
+                                    )
+                                    ? _accountId
+                                    : null,
+                                decoration: _field(
+                                  c,
+                                  _debtDirection != null
+                                      ? (_debtDirection == 'owedToMe'
+                                            ? 'Compte qui reçoit'
+                                            : 'Compte qui paie')
+                                      : 'Compte',
+                                ),
+                                items: <DropdownMenuItem<String>>[
+                                  for (final Account account in accountItems)
+                                    DropdownMenuItem<String>(
+                                      value: account.id,
+                                      child: Text(
+                                        '${account.name} · ${account.brand.label}',
+                                      ),
+                                    ),
+                                ],
+                                onChanged: (String? value) =>
+                                    setState(() => _accountId = value),
+                              ),
+                              if (_kind == TransactionKind.transfer &&
+                                  !_neutral &&
+                                  _debtDirection == null) ...<Widget>[
+                                const SizedBox(height: AkibaSpacing.md),
+                                DropdownButtonFormField<String>(
+                                  initialValue:
+                                      accountItems.any(
+                                        (Account a) => a.id == _toAccountId,
+                                      )
+                                      ? _toAccountId
+                                      : null,
+                                  decoration: _field(c, 'Compte destination'),
+                                  items: <DropdownMenuItem<String>>[
+                                    for (final Account account in accountItems)
+                                      if (account.id != _accountId)
+                                        DropdownMenuItem<String>(
+                                          value: account.id,
+                                          child: Text(
+                                            '${account.name} · '
+                                            '${account.brand.label}',
+                                          ),
+                                        ),
+                                  ],
+                                  onChanged: (String? value) =>
+                                      setState(() => _toAccountId = value),
+                                ),
+                              ],
+                              const SizedBox(height: AkibaSpacing.md),
+                              if (!_neutral &&
+                                  _debtDirection == null &&
+                                  _kind != TransactionKind.transfer)
+                                DropdownButtonFormField<String>(
+                                  initialValue: safeCategory,
+                                  decoration: _field(c, 'Catégorie'),
+                                  items: <DropdownMenuItem<String>>[
+                                    for (final String category in categories)
+                                      DropdownMenuItem<String>(
+                                        value: category,
+                                        child: Text(category),
+                                      ),
+                                  ],
+                                  onChanged: (String? value) {
+                                    if (value != null) {
+                                      setState(() => _category = value);
+                                    }
+                                  },
+                                ),
+                              const SizedBox(height: AkibaSpacing.md),
+                              TextField(
+                                controller: _note,
+                                decoration: _field(
+                                  c,
+                                  _debtDirection != null
+                                      ? 'Contact (ex. Koffi)'
+                                      : 'Note',
+                                ),
+                              ),
+                              const SizedBox(height: AkibaSpacing.md),
+                              Text(
+                                _debtDirection != null
+                                    ? _settleMode
+                                          ? (_debtDirection == 'owedToMe'
+                                                ? 'Le montant encaissé sera '
+                                                      'ajouté au compte choisi ; '
+                                                      'le reste dû diminue '
+                                                      'd’autant.'
+                                                : 'Le montant payé sera retiré '
+                                                      'du compte choisi ; le '
+                                                      'reste dû diminue d’autant.')
+                                          : 'La créance / dette sera '
+                                                'enregistrée sans mouvement de '
+                                                'trésorerie : elle reste hors '
+                                                'du solde disponible, du budget '
+                                                'et des statistiques.'
+                                    : _neutral
+                                    ? 'Argent de tiers : la ligne sera isolée du '
+                                          'solde disponible, du budget et des '
+                                          'statistiques.'
+                                    : _kind == TransactionKind.transfer
+                                    ? 'Transfert : deux écritures symétriques, '
+                                          'le total des comptes ne change pas.'
+                                    : _kind == TransactionKind.income
+                                    ? 'Entrée enregistrée sur le compte choisi.'
+                                    : 'Sortie enregistrée sur le compte choisi.',
+                                style: AkibaTypography.legend.copyWith(
+                                  color: c.textMuted,
+                                ),
+                              ),
+                              const SizedBox(height: AkibaSpacing.lg),
+                              FilledButton.icon(
+                                onPressed: _save,
+                                icon: const Icon(Icons.check_rounded, size: 18),
+                                label: Text(
+                                  _settleMode
+                                      ? 'Confirmer le règlement · '
+                                            '${_previewAmount()}'
+                                      : 'Confirmer · ${_previewAmount()}',
+                                ),
+                              ),
+                              const SizedBox(height: AkibaSpacing.xs),
+                              Text(
+                                'Aucune écriture n’est faite avant ce bouton.',
+                                textAlign: TextAlign.center,
+                                style: AkibaTypography.legend.copyWith(
+                                  color: c.textMuted,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
                   ],
                 ),
               ),
@@ -1124,6 +1506,259 @@ class _AssistantSheetState extends State<_AssistantSheet> {
         ),
       ),
     );
+  }
+
+  /// Carte dédiée à un objectif d'épargne récurrent.
+  ///
+  /// Elle remplace la carte d'opération : le montant dicté est un versement
+  /// **quotidien**, pas une dépense. La date d'atteinte est calculée en direct
+  /// dès que le prix de l'objectif est connu.
+  Widget _savingsGoalCard(AkibaColors c) {
+    final DateTime start = _draft?.occurredAt ?? DateTime.now();
+    return Container(
+      padding: const EdgeInsets.all(AkibaSpacing.lg),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(AkibaRadii.card),
+        boxShadow: c.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(Icons.savings_outlined, size: 18, color: c.terracotta),
+              const SizedBox(width: AkibaSpacing.sm),
+              Expanded(
+                child: Text(
+                  'Objectif d’épargne · à confirmer',
+                  style: AkibaTypography.label.copyWith(
+                    color: c.textMuted,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+              ),
+              Flexible(
+                child: Text(
+                  '$_engineNote · ${_confidenceLabel(_draft!.confidence)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: AkibaTypography.legend.copyWith(
+                    color: c.textMuted,
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AkibaSpacing.md),
+          Container(
+            padding: const EdgeInsets.all(AkibaSpacing.md),
+            decoration: BoxDecoration(
+              color: c.iconTile,
+              borderRadius: BorderRadius.circular(AkibaRadii.field),
+            ),
+            child: Text(
+              'AKIBA crée le coffre et calcule quand l’objectif sera atteint. '
+              'Aucun versement n’est débité avant votre confirmation.',
+              style: AkibaTypography.legend.copyWith(
+                color: c.textMuted,
+                height: 1.4,
+              ),
+            ),
+          ),
+          const SizedBox(height: AkibaSpacing.md),
+          TextField(
+            controller: _goalName,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: _field(c, 'Nom du coffre (ex. Moniteur)'),
+          ),
+          const SizedBox(height: AkibaSpacing.md),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: TextField(
+                  controller: _goalTarget,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: <TextInputFormatter>[
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(9),
+                  ],
+                  decoration: _field(c, 'Prix de l’objectif'),
+                ),
+              ),
+              const SizedBox(width: AkibaSpacing.sm),
+              Text(
+                'FCFA',
+                style: AkibaTypography.legend.copyWith(color: c.textMuted),
+              ),
+            ],
+          ),
+          const SizedBox(height: AkibaSpacing.md),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: TextField(
+                  controller: _amount,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: <TextInputFormatter>[
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(9),
+                  ],
+                  decoration: _field(c, 'Chaque jour'),
+                ),
+              ),
+              const SizedBox(width: AkibaSpacing.sm),
+              Text(
+                'FCFA / jour',
+                style: AkibaTypography.legend.copyWith(color: c.textMuted),
+              ),
+            ],
+          ),
+          const SizedBox(height: AkibaSpacing.md),
+          Text(
+            'Premier versement : ${AkibaDate.short(start)}.',
+            style: AkibaTypography.legend.copyWith(color: c.textMuted),
+          ),
+          const SizedBox(height: AkibaSpacing.xs),
+          ListenableBuilder(
+            listenable: Listenable.merge(<Listenable>[_goalTarget, _amount]),
+            builder: (BuildContext context, Widget? _) {
+              final int target = int.tryParse(_goalTarget.text) ?? 0;
+              final int daily = int.tryParse(_amount.text) ?? 0;
+              final DateTime? date = SavingsProjection.dateForDailyPlan(
+                target: target,
+                daily: daily,
+                firstDeposit: start,
+              );
+              if (target <= 0) {
+                return Text(
+                  'Indiquez le prix de l’objectif pour connaître la date '
+                  'd’atteinte.',
+                  style: AkibaTypography.legend.copyWith(
+                    color: c.warning,
+                    height: 1.4,
+                  ),
+                );
+              }
+              if (date == null) {
+                return Text(
+                  'Avec ce rythme, l’objectif n’est pas atteignable dans les '
+                  'dix ans. Augmentez le versement quotidien.',
+                  style: AkibaTypography.legend.copyWith(
+                    color: c.warning,
+                    height: 1.4,
+                  ),
+                );
+              }
+              final int deposits = SavingsProjection.depositsFor(
+                target: target,
+                daily: daily,
+              );
+              return Text(
+                '$deposits versements de '
+                '${AkibaMoney.format(daily, masked: widget.masked)} · objectif '
+                'atteint le ${AkibaDate.short(date)}.',
+                style: AkibaTypography.legend.copyWith(
+                  color: c.success,
+                  height: 1.4,
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: AkibaSpacing.lg),
+          FilledButton.icon(
+            onPressed: _saveSavingsGoal,
+            icon: const Icon(Icons.check_rounded, size: 18),
+            label: const Text('Créer l’épargne'),
+          ),
+          const SizedBox(height: AkibaSpacing.xs),
+          Text(
+            'Aucune écriture n’est faite avant ce bouton.',
+            textAlign: TextAlign.center,
+            style: AkibaTypography.legend.copyWith(
+              color: c.textMuted,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Crée le coffre de l'objectif et mémorise le rythme quotidien.
+  ///
+  /// Aucune transaction n'est écrite : le premier versement reste un geste
+  /// volontaire de la personne, comme partout dans AKIBA.
+  Future<void> _saveSavingsGoal() async {
+    final int daily = int.tryParse(_amount.text) ?? 0;
+    final int target = int.tryParse(_goalTarget.text) ?? 0;
+    if (daily <= 0 || daily > 999999999) {
+      setState(
+        () => _message = 'Versement quotidien invalide (1 à 999 999 999 FCFA).',
+      );
+      return;
+    }
+    if (target < 0 || target > 999999999) {
+      setState(() => _message = 'Prix de l’objectif invalide.');
+      return;
+    }
+    final String name = _goalName.text.trim().isEmpty
+        ? 'Objectif'
+        : _goalName.text.trim();
+    final DateTime start = _draft?.occurredAt ?? DateTime.now();
+    final DateTime? date = SavingsProjection.dateForDailyPlan(
+      target: target,
+      daily: daily,
+      firstDeposit: start,
+    );
+    final DateTime now = DateTime.now();
+    try {
+      final SavingsPot pot = SavingsPot(
+        id: 'pot-${now.microsecondsSinceEpoch}',
+        name: name,
+        kind: SavingsKind.goal,
+        targetAmount: target,
+        targetDate: date,
+        createdAt: now,
+      );
+      await widget.store.saveSavingsPot(pot);
+      // Le rythme est mémorisé pour le rappel et le suivi, sans être un
+      // mouvement d'argent : aucun solde ne change ici.
+      await widget.settings.set(
+        'savings_plan_${pot.id}',
+        jsonEncode(<String, Object?>{
+          'daily': daily,
+          'first': start.toUtc().toIso8601String(),
+          'target': target,
+        }),
+      );
+      widget.revision.bump();
+      if (!mounted) return;
+      final NavigatorState navigator = Navigator.of(context);
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      navigator.pop();
+      HapticFeedback.lightImpact();
+      final String horizon = date == null
+          ? ' Ajoutez le prix de l’objectif pour connaître la date d’atteinte.'
+          : ' Objectif atteint le ${AkibaDate.short(date)}.';
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              'Épargne « $name » créée : '
+              '${AkibaMoney.format(daily, masked: widget.masked)} par jour.$horizon',
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+    } catch (_) {
+      if (mounted) {
+        setState(() => _message = 'Création du coffre impossible.');
+      }
+    }
   }
 
   String _previewAmount() {
@@ -1193,4 +1828,86 @@ class _MicButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Rendu lisible d'un conseil : paragraphes aérés, puces alignées et montants
+/// mis en avant. Jamais de JSON ni de Markdown affiché tel quel.
+class _AnswerText extends StatelessWidget {
+  const _AnswerText({required this.text, required this.colors});
+
+  final String text;
+  final AkibaColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<AiTextBlock> blocks = AiText.blocks(text);
+    if (blocks.isEmpty) return const SizedBox.shrink();
+    final TextStyle style = AkibaTypography.body.copyWith(
+      color: colors.textPrimary,
+      height: 1.45,
+    );
+    Widget selectable(String value) => SelectableText.rich(
+      TextSpan(children: _highlight(value, style, colors.terracotta)),
+      style: style,
+    );
+    final List<Widget> children = <Widget>[];
+    for (int index = 0; index < blocks.length; index++) {
+      final AiTextBlock block = blocks[index];
+      if (index > 0) {
+        children.add(
+          SizedBox(height: block.isBullet ? AkibaSpacing.xs : AkibaSpacing.sm),
+        );
+      }
+      if (!block.isBullet) {
+        children.add(selectable(block.text));
+        continue;
+      }
+      children.add(
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.only(top: 7, right: AkibaSpacing.sm),
+              child: Container(
+                width: 5,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: colors.terracotta,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+            Expanded(child: selectable(block.text)),
+          ],
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+}
+
+/// Met en gras les montants en FCFA pour une lecture immédiate.
+List<InlineSpan> _highlight(String text, TextStyle style, Color accent) {
+  final RegExp amounts = RegExp(r'\d[\d\u00A0 ]{0,15}\s?(?:FCFA|CFA)\b');
+  final List<InlineSpan> spans = <InlineSpan>[];
+  int cursor = 0;
+  for (final RegExpMatch match in amounts.allMatches(text)) {
+    if (match.start > cursor) {
+      spans.add(TextSpan(text: text.substring(cursor, match.start)));
+    }
+    spans.add(
+      TextSpan(
+        text: match.group(0),
+        style: style.copyWith(color: accent, fontWeight: FontWeight.w700),
+      ),
+    );
+    cursor = match.end;
+  }
+  if (cursor < text.length) {
+    spans.add(TextSpan(text: text.substring(cursor)));
+  }
+  return spans.isEmpty ? <InlineSpan>[TextSpan(text: text)] : spans;
 }

@@ -1096,3 +1096,30 @@ dans le PDF. En mode masqué, l'assistant ne fait toujours aucun appel distant.
 | Montants non recalculés, non inventés | ✅ tests |
 | PDF : avis du modèle injecté quand il est lisible | ✅ test (`monthly_report_test.dart`) |
 | Rendu visuel réel assistant / PDF | 🔒 à vérifier sur appareil |
+
+---
+
+## 28. Code à 4 chiffres des sauvegardes du serveur (27/11/2026)
+
+Le serveur Home Lab ne dépend plus du compte Google : l'enveloppe version 4 est
+chiffrée AES-256-GCM avec une clé dérivée du code à 4 chiffres et d'un sel
+aléatoire de 16 octets (PBKDF2-HMAC-SHA256, 120 000 tours). Le code vit dans le
+coffre du système, n'est jamais écrit dans l'enveloppe, les réglages ou les
+journaux, et n'est jamais renvoyé dans un message d'erreur.
+
+**Limite assumée** : 10 000 combinaisons seulement. Le code empêche une lecture
+accidentelle et rend la restauration simple sur un autre appareil ; il ne résiste
+pas à un attaquant qui obtiendrait le fichier et disposerait d'un temps de calcul
+important. La confidentialité réelle repose sur l'accès au serveur (jeton) et sur
+la protection du coffre du téléphone. Aucun mécanisme de récupération n'est
+offert : c'est le comportement demandé (code oublié = sauvegarde à écraser,
+redépart à zéro), et il évite qu'un tiers puisse réinitialiser l'accès.
+
+| Contrôle | Résultat |
+| --- | --- |
+| AES-256-GCM, tag validé avant toute écriture | ✅ code et tests |
+| Sel frais par sauvegarde, KDF versionné (`PBKDF2-CODE`) | ✅ `backup_code_test.dart` |
+| Code absent / faux distingués, sans fuite du code saisi | ✅ tests |
+| Code hors réglages, enveloppe, journaux | ✅ test (`settings.raw('backup_code')` vide, enveloppe sans `1234`) |
+| Anciennes enveloppes (Google, clé d'appareil) encore lisibles | ✅ tests |
+| Robustesse réelle du code à 4 chiffres | 🔒 limite documentée, non contournable sans phrase secrète |

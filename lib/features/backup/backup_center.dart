@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/backup/backup_code.dart';
 import '../../core/backup/backup_progress.dart';
 import '../../core/backup/backup_service.dart';
 import '../../core/backup/google_account.dart';
@@ -67,6 +68,10 @@ class _BackupSheetState extends State<_BackupSheet> {
   );
   late final TextEditingController _labToken = TextEditingController();
 
+  /// Code à 4 chiffres du serveur de sauvegarde : demandé à la configuration,
+  /// puis à chaque restauration sur un autre appareil.
+  late final TextEditingController _labCode = TextEditingController();
+
   int _target = 0;
   bool _busy = false;
   bool _restoring = false;
@@ -107,11 +112,37 @@ class _BackupSheetState extends State<_BackupSheet> {
     setState(() => _googleEmail = email);
   }
 
+  /// Jeton réellement utilisé : celui qui vient d'être collé s'il y en a un,
+  /// sinon celui du coffre.
+  ///
+  /// Sans cela, une sauvegarde ou une restauration lancée juste après avoir
+  /// saisi le jeton — mais avant « Enregistrer et activer » — partait avec
+  /// l'ancien jeton, ou aucun, et le serveur répondait 401.
+  Future<String> _currentLabToken() async {
+    final String typed = _labToken.text.trim();
+    if (typed.isNotEmpty) return typed;
+    return _lab.currentToken();
+  }
+
+  /// Jeton exigé pour parler au Home Lab, avec un message actionnable s'il
+  /// manque (le serveur, lui, ne répondrait qu'un 401 sec).
+  Future<String> _requireLabToken() async {
+    final String token = await _currentLabToken();
+    if (token.isEmpty) {
+      throw const BackupException(
+        'Aucun jeton Home Lab : saisissez-le à l’étape 2, puis appuyez sur '
+        '« Enregistrer et activer ».',
+      );
+    }
+    return token;
+  }
+
   @override
   void dispose() {
     _folder.dispose();
     _labUrl.dispose();
     _labToken.dispose();
+    _labCode.dispose();
     _stage.dispose();
     super.dispose();
   }
@@ -159,10 +190,11 @@ class _BackupSheetState extends State<_BackupSheet> {
     }
   }
 
-  /// Étape 1 — « Tester la communication » : lecture seule, **sans jeton**.
+  /// Étape 1 — « Tester la communication » : lecture seule.
   ///
   /// L'adresse est normalisée (IP seule, `ip:port`, nom local ou URL), puis
-  /// réellement interrogée ; la latence et un diagnostic précis sont affichés.
+  /// réellement interrogée. Le jeton déjà saisi ou enregistré est envoyé s'il
+  /// existe : un 401 affiche alors le motif exact renvoyé par le serveur.
   Future<void> _testLabCommunication() async {
     if (_busy) return;
     setState(() {
@@ -171,7 +203,10 @@ class _BackupSheetState extends State<_BackupSheet> {
       _isError = false;
     });
     try {
-      final HomeLabSetupResult result = await _lab.testAddress(_labUrl.text);
+      final HomeLabSetupResult result = await _lab.testAddress(
+        _labUrl.text,
+        token: await _currentLabToken(),
+      );
       if (!mounted) return;
       if (_lab.url.isNotEmpty) _labUrl.text = _lab.url;
       _show(result.message, error: !result.ok);
@@ -194,10 +229,15 @@ class _BackupSheetState extends State<_BackupSheet> {
     try {
       final HomeLabSetupResult result = await _lab.activateToken(
         _labToken.text,
+        code: _labCode.text,
       );
       if (!mounted) return;
-      // Le jeton n'est jamais laissé en clair dans un champ après validation.
-      if (result.ok) _labToken.clear();
+      // Ni le jeton ni le code ne restent en clair dans un champ après
+      // validation : les deux sont protégés dans le coffre du système.
+      if (result.ok) {
+        _labToken.clear();
+        _labCode.clear();
+      }
       _show(result.message, error: !result.ok);
     } catch (error) {
       _show('Activation impossible (${error.runtimeType}).', error: true);
@@ -240,7 +280,7 @@ class _BackupSheetState extends State<_BackupSheet> {
     }
     return _service.fetchRemote(
       url: _labUrl.text.trim(),
-      token: await _lab.currentToken(),
+      token: await _requireLabToken(),
       onStage: (BackupStage stage) => _stage.value = stage,
     );
   }
@@ -321,7 +361,7 @@ class _BackupSheetState extends State<_BackupSheet> {
       } else {
         location = await _service.putRemote(
           url: _labUrl.text.trim(),
-          token: await _lab.currentToken(),
+          token: await _requireLabToken(),
           envelope: envelope,
           onStage: (BackupStage stage) => _stage.value = stage,
         );
@@ -376,6 +416,58 @@ class _BackupSheetState extends State<_BackupSheet> {
     }
   }
 
+  /// Demande le code à 4 chiffres d'une sauvegarde du serveur.
+  ///
+  /// Le dialogue rappelle qu'un code oublié ne se retrouve pas : la seule
+  /// issue est de créer une nouvelle sauvegarde avec un nouveau code, qui
+  /// écrase celle du serveur, donc de repartir de zéro.
+  Future<String?> _askRestoreCode() async {
+    final String stored = await _lab.currentCode();
+    if (!mounted) return null;
+    final String initial = stored.isNotEmpty
+        ? stored
+        : normalizeBackupCode(_labCode.text);
+    final TextEditingController controller = TextEditingController(
+      text: initial,
+    );
+    final AkibaColors c = AkibaColors.of(context);
+    final String? value = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialog) => AlertDialog(
+        backgroundColor: c.surface,
+        title: const Text('Code de sauvegarde'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          obscureText: true,
+          keyboardType: TextInputType.number,
+          maxLength: 4,
+          inputFormatters: <TextInputFormatter>[
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(4),
+          ],
+          decoration: const InputDecoration(
+            labelText: 'Code à 4 chiffres',
+            hintText: '••••',
+          ),
+          onSubmitted: (String text) => Navigator.of(dialog).pop(text.trim()),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialog).pop(controller.text.trim()),
+            child: const Text('Restaurer'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return value;
+  }
+
   Future<void> _restore() async {
     setState(() {
       _busy = true;
@@ -386,6 +478,26 @@ class _BackupSheetState extends State<_BackupSheet> {
       final Map<String, dynamic>? remote = await _fetchRemote();
       if (remote == null) {
         _show('Aucune sauvegarde à restaurer.');
+        return;
+      }
+      if (!mounted) return;
+      // Le code n'est demandé que pour les enveloppes du serveur (version 4).
+      // Un ancien fichier chiffré avec le compte Google reste ouvrable avec ce
+      // compte, sans code.
+      String code = '';
+      if ('${remote['kdf']}' == 'PBKDF2-CODE') {
+        final String? typed = await _askRestoreCode();
+        if (typed == null) {
+          _show('Restauration annulée : aucun code saisi.');
+          return;
+        }
+        code = normalizeBackupCode(typed);
+      }
+      if (!isValidBackupCode(code) && '${remote['kdf']}' == 'PBKDF2-CODE') {
+        _show(
+          'Le code de sauvegarde comporte exactement 4 chiffres.',
+          error: true,
+        );
         return;
       }
       if (!mounted) return;
@@ -420,8 +532,18 @@ class _BackupSheetState extends State<_BackupSheet> {
       final Map<String, int> restored = await _service.restore(
         remote,
         account: await _google.currentAccount(),
+        code: code,
         onStage: (BackupStage stage) => _stage.value = stage,
       );
+      if (code.isNotEmpty) {
+        // Le code vient d'ouvrir la sauvegarde : il est conservé dans le coffre
+        // pour la prochaine restauration et pour la sauvegarde automatique.
+        try {
+          await _lab.codes.write(code);
+        } catch (_) {
+          // Coffre indisponible : la restauration reste réussie.
+        }
+      }
       widget.revision.bump();
       await widget.settings.load();
       _stage.value = BackupStage.done;
@@ -662,7 +784,7 @@ class _BackupSheetState extends State<_BackupSheet> {
                                       ? 'Communication OK'
                                             '${latency.isEmpty ? '' : ' · $latency'}'
                                       : ready
-                                      ? 'Lecture seule, sans jeton.'
+                                      ? 'Lecture seule, rien n’est écrit.'
                                       : 'Saisissez l’adresse du serveur.',
                                   style: AkibaTypography.legend.copyWith(
                                     color: _lab.reachable
@@ -703,7 +825,42 @@ class _BackupSheetState extends State<_BackupSheet> {
                           obscureText: true,
                           autocorrect: false,
                           enableSuggestions: false,
-                          decoration: _field(c, 'Jeton d’accès Home Lab'),
+                          decoration: _field(
+                            c,
+                            'Jeton d’accès Home Lab (JETON:mon_nom si partagé)',
+                          ),
+                        ),
+                        const SizedBox(height: AkibaSpacing.sm),
+                        TextField(
+                          controller: _labCode,
+                          obscureText: true,
+                          enableSuggestions: false,
+                          autocorrect: false,
+                          keyboardType: TextInputType.number,
+                          maxLength: 4,
+                          inputFormatters: <TextInputFormatter>[
+                            FilteringTextInputFormatter.digitsOnly,
+                            LengthLimitingTextInputFormatter(4),
+                          ],
+                          decoration: _field(
+                            c,
+                            _lab.codeSaved
+                                ? 'Code de sauvegarde (déjà défini, 4 chiffres)'
+                                : 'Choisissez un code de sauvegarde (4 chiffres)',
+                          ),
+                        ),
+                        const SizedBox(height: AkibaSpacing.xs),
+                        Text(
+                          'Ce code remplace le compte Google pour ce serveur : il '
+                          'sera demandé pour restaurer sur un autre appareil. Il '
+                          'n’est jamais écrit en clair. S’il est oublié, la '
+                          'sauvegarde ne peut pas être rouverte : il faudra '
+                          'créer une nouvelle sauvegarde avec un nouveau code et '
+                          'repartir de zéro.',
+                          style: AkibaTypography.legend.copyWith(
+                            color: _lab.codeSaved ? c.success : c.textMuted,
+                            height: 1.45,
+                          ),
                         ),
                         const SizedBox(height: AkibaSpacing.sm),
                         Align(
@@ -753,11 +910,12 @@ class _BackupSheetState extends State<_BackupSheet> {
                         const SizedBox(width: AkibaSpacing.sm),
                         Expanded(
                           child: Text(
-                            'Chiffrement automatique AES-256-GCM. La clé est '
-                            'dérivée du compte Google connecté et d’un sel '
-                            'aléatoire; aucune clé à retenir ou saisir. Protégez '
-                            'l’accès à votre compte Google. Aucun montant en clair '
-                            'dans le fichier envoyé.',
+                            'Chiffrement automatique AES-256-GCM. Sur Google '
+                            'Drive, la clé est dérivée du compte connecté ; sur le '
+                            'serveur Home Lab, elle est dérivée du code à '
+                            '4 chiffres et d’un sel aléatoire. Aucun montant en '
+                            'clair dans le fichier envoyé, et aucune phrase '
+                            'secrète à retenir.',
                             style: AkibaTypography.legend.copyWith(
                               color: c.textMuted,
                               height: 1.45,

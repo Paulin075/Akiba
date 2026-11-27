@@ -11,6 +11,7 @@ import '../../core/state/akiba_settings.dart';
 import '../../core/theme/akiba_colors.dart';
 import '../../core/theme/akiba_tokens.dart';
 import '../../core/theme/akiba_typography.dart';
+import '../../core/widgets/pinch_zoom.dart';
 
 /// Prévisualisation directe du PDF généré, dans l'application.
 ///
@@ -37,7 +38,32 @@ class ReportPreviewScreen extends StatefulWidget {
 class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
   bool _sharing = false;
 
+  /// Zoom tactile du PDF : pincer pour agrandir, double-tap pour revenir.
+  final TransformationController _zoom = TransformationController();
+  bool _zoomed = false;
+
   MonthlyReport get _report => widget.report;
+
+  @override
+  void initState() {
+    super.initState();
+    _zoom.addListener(_onZoomChanged);
+  }
+
+  @override
+  void dispose() {
+    _zoom
+      ..removeListener(_onZoomChanged)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onZoomChanged() {
+    final bool zoomed = _zoom.value.getMaxScaleOnAxis() > 1.01;
+    if (zoomed != _zoomed && mounted) setState(() => _zoomed = zoomed);
+  }
+
+  void _resetZoom() => _zoom.value = Matrix4.identity();
 
   void _toast(String message, {bool error = false}) {
     if (!mounted) return;
@@ -187,28 +213,59 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
                     fontSize: 11,
                   ),
                 ),
+                const SizedBox(height: AkibaSpacing.xs),
+                Row(
+                  children: <Widget>[
+                    Icon(Icons.pinch_rounded, size: 14, color: c.textMuted),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        en
+                            ? 'Pinch to zoom, double-tap to reset.'
+                            : 'Pincez pour zoomer, double-tap pour revenir.',
+                        style: AkibaTypography.legend.copyWith(
+                          color: c.textMuted,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                    if (_zoomed)
+                      TextButton(
+                        onPressed: _resetZoom,
+                        child: Text(en ? 'Reset' : 'Réinitialiser'),
+                      ),
+                  ],
+                ),
               ],
             ),
           ),
           Expanded(
-            child: PdfPreview(
-              build: (PdfPageFormat format) async => widget.bytes,
-              pdfFileName: ReportPdfBuilder.fileName(_report),
-              canChangeOrientation: false,
-              canChangePageFormat: false,
-              canDebug: false,
-              allowPrinting: false,
-              allowSharing: false,
-              useActions: false,
-              dynamicLayout: false,
-              padding: const EdgeInsets.all(AkibaSpacing.sm),
-              loadingWidget: Center(
-                child: CircularProgressIndicator(color: c.terracotta),
-              ),
-              onError: (BuildContext context, Object error) => Center(
-                child: Text(
-                  'Aperçu indisponible.',
-                  style: TextStyle(color: c.textMuted),
+            child: PinchZoom(
+              controller: _zoom,
+              // Le défilement vertical reste au PDF tant que rien n'est zoomé ;
+              // une fois agrandi, on déplace la page du doigt. L'échelle
+              // maximale est très élevée (AkibaZoom.maxScale) : le pincement
+              // n'est jamais bloqué à un faible facteur.
+              panEnabled: _zoomed,
+              child: PdfPreview(
+                build: (PdfPageFormat format) async => widget.bytes,
+                pdfFileName: ReportPdfBuilder.fileName(_report),
+                canChangeOrientation: false,
+                canChangePageFormat: false,
+                canDebug: false,
+                allowPrinting: false,
+                allowSharing: false,
+                useActions: false,
+                dynamicLayout: false,
+                padding: const EdgeInsets.all(AkibaSpacing.sm),
+                loadingWidget: Center(
+                  child: CircularProgressIndicator(color: c.terracotta),
+                ),
+                onError: (BuildContext context, Object error) => Center(
+                  child: Text(
+                    'Aperçu indisponible.',
+                    style: TextStyle(color: c.textMuted),
+                  ),
                 ),
               ),
             ),

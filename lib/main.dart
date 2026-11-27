@@ -5,6 +5,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+import 'core/audio/cauri_sound.dart';
+import 'core/backup/auto_backup.dart';
 import 'core/backup/home_lab_setup.dart';
 import 'core/config/google_oauth_config.dart';
 import 'core/database/akiba_database.dart';
@@ -47,6 +49,16 @@ Future<void> main() async {
   final AkibaSettings settings = AkibaSettings(store);
   await settings.load();
 
+  // Sauvegarde automatique : toute écriture métier notifie le coordinateur.
+  // Le magasin enveloppé est donné à l'interface ; les réglages gardent le
+  // magasin brut, sinon la sauvegarde de sa propre date déclencherait une
+  // boucle. Le mode simulation n'écrit jamais dans la base réelle.
+  final AutoBackupCoordinator autoBackup = AutoBackupCoordinator(
+    store: store,
+    settings: settings,
+  );
+  store = AutoBackupStore(store, onChanged: autoBackup.schedule);
+
   // Formats et langue appliqués avant la première image : aucun montant ni
   // libellé ne s'affiche avec la valeur par défaut (FCFA / français).
   AkibaMoney.currency = settings.currencyLabel;
@@ -58,21 +70,34 @@ Future<void> main() async {
     ProfilePhotoStore(),
   );
 
-  // Première image tout de suite : l'ouverture courte couvre la suite.
-  runApp(AkibaApp(store: store, settings: settings, photo: photo));
+  // Première image tout de suite : l'ouverture d'une seconde couvre la suite.
+  runApp(
+    AkibaApp(
+      store: store,
+      settings: settings,
+      photo: photo,
+      autoBackup: autoBackup,
+    ),
+  );
 
-  // Hors du chemin critique — aucun de ces travaux ne bloque l'affichage :
-  // contrôle d'intégrité de la base, photo chiffrée (coffre du système),
-  // rappels de repas en arrière-plan et préchauffage des logos.
-  unawaited(AkibaDatabase.integrityCheck());
-  unawaited(photo.load());
-  // Les rappels planifiés sont recalculés à chaque démarrage : une mise à jour
-  // du système ou un redémarrage ne les laisse pas périmés. C'est le seul
-  // point d'entrée, pour ne pas inscrire deux fois la tâche Workmanager.
-  unawaited(ReminderScheduler.reprogram(settings, store: store));
-  // Sauvegarde automatique Home Lab : silencieuse, jamais bloquante.
-  unawaited(runLabAutoBackupOnStartup(store, settings));
-  BrandImages.warmUp();
+  // Tout ce qui n'est pas indispensable au premier écran démarre **après** la
+  // première image : le verrou PIN (ou l'onboarding) répond en ~1 s, même sur
+  // un appareil lent. Aucun de ces travaux ne bloque l'interface.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(AkibaDatabase.integrityCheck());
+    unawaited(photo.load());
+    // Les rappels planifiés sont recalculés à chaque démarrage : une mise à
+    // jour du système ou un redémarrage ne les laisse pas périmés. C'est le
+    // seul point d'entrée, pour ne pas inscrire deux fois Workmanager.
+    unawaited(ReminderScheduler.reprogram(settings, store: store));
+    // Sauvegarde automatique Home Lab : silencieuse, jamais bloquante.
+    unawaited(runLabAutoBackupOnStartup(store, settings));
+    // Une sauvegarde interrompue hors ligne est reprise dès le démarrage.
+    unawaited(autoBackup.retryIfPending());
+    BrandImages.warmUp();
+    // Son court prêt avant le premier versement d'épargne.
+    unawaited(CauriSound.preload());
+  });
 }
 
 /// Racine AKIBA : thème clair par défaut, onboarding E1→E11 au premier
@@ -83,11 +108,15 @@ class AkibaApp extends StatefulWidget {
     this.store = const EmptyAkibaStore(),
     this.settings,
     this.photo,
+    this.autoBackup,
   });
 
   final AkibaStore store;
   final AkibaSettings? settings;
   final ProfilePhotoController? photo;
+
+  /// Coordinateur de sauvegarde automatique (absent dans les tests).
+  final AutoBackupCoordinator? autoBackup;
 
   @override
   State<AkibaApp> createState() => _AkibaAppState();
@@ -114,6 +143,12 @@ class _AkibaAppState extends State<AkibaApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Retour au premier plan : le réseau a pu revenir. Une sauvegarde en
+    // attente est retentée sans attendre le minuteur.
+    if (state == AppLifecycleState.resumed) {
+      final AutoBackupCoordinator? auto = widget.autoBackup;
+      if (auto != null) unawaited(auto.retryIfPending());
+    }
     // Fermeture propre : checkpoint WAL puis close, sans bloquer l'UI.
     if (state == AppLifecycleState.detached) AkibaDatabase.close();
   }
@@ -121,6 +156,7 @@ class _AkibaAppState extends State<AkibaApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.autoBackup?.dispose();
     _revision.dispose();
     super.dispose();
   }

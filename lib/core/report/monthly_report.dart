@@ -7,6 +7,7 @@ import '../../data/models/savings_pot.dart';
 import '../../data/models/third_party.dart';
 import '../ai/ai_client.dart';
 import '../ai/ai_quota.dart';
+import '../ai/ai_text.dart';
 import '../ai/ai_remote.dart';
 import '../format/akiba_money.dart';
 import '../state/akiba_settings.dart';
@@ -55,28 +56,27 @@ class ReportAdvice {
 
   bool get fromAi => engine != 'local';
 
-  /// Lit une réponse libre du modèle : première ligne = verdict, suivantes =
-  /// conseils. Renvoie `null` si la réponse n'est pas exploitable.
+  /// Lit une réponse du modèle : première ligne = verdict, suivantes =
+  /// conseils. Le JSON (`{"avis": ..., "conseils": [...]}`) et le Markdown
+  /// sont ramenés à ce même texte, pour que l'avis réel arrive au PDF.
+  /// Renvoie `null` si la réponse n'est pas exploitable.
   static ReportAdvice? parse(
     String raw, {
     required String engine,
     required String language,
   }) {
-    final List<String> lines = raw
-        .split(RegExp(r'\r?\n'))
-        .map(
-          (String line) => line
-              .trim()
-              .replaceAll(RegExp(r'^[-*•\d\.\)\s]+'), '')
-              .replaceAll(RegExp(r'^["“”\s]+|["“”\s]+$'), ''),
-        )
-        .where((String line) => line.isNotEmpty)
-        .toList(growable: false);
+    final List<String> lines = AiText.lines(raw);
     if (lines.isEmpty) return null;
-    final String headline = lines.first.length > 160
-        ? '${lines.first.substring(0, 157)}…'
-        : lines.first;
-    final List<String> tips = lines
+    // Réponse en une seule phrase : on la découpe aux phrases pour garder un
+    // verdict et des conseils plutôt que de tout perdre.
+    final List<String> parts = lines.length > 1
+        ? lines
+        : _sentences(lines.first);
+    if (parts.length < 2) return null;
+    final String headline = parts.first.length > 160
+        ? '${parts.first.substring(0, 157)}…'
+        : parts.first;
+    final List<String> tips = parts
         .skip(1)
         .take(3)
         .map(
@@ -91,6 +91,13 @@ class ReportAdvice {
       language: language,
     );
   }
+
+  /// Découpe un paragraphe en phrases (la première sert de verdict).
+  static List<String> _sentences(String text) => text
+      .split(RegExp(r'(?<=[.!?])\s+'))
+      .map((String part) => part.trim())
+      .where((String part) => part.isNotEmpty)
+      .toList(growable: false);
 }
 
 /// Rapport financier d'une période, **100 % local**.
@@ -505,8 +512,8 @@ class ReportAdvisor {
     );
     buffer.writeln(
       en
-          ? 'Reply with 4 short lines and nothing else: line 1 is a verdict of 10 words max; lines 2 to 4 are three concrete, kind, actionable tips. No markdown, no numbering, no amount in the verdict.'
-          : 'Réponds en 4 lignes courtes et rien d’autre : la ligne 1 est un verdict de 10 mots maximum ; les lignes 2 à 4 sont trois conseils concrets, bienveillants et actionnables. Pas de markdown, pas de numérotation, pas de montant dans le verdict.',
+          ? 'Reply only with a JSON object, no text around it: {"avis": "verdict of 10 words max", "conseils": ["actionable tip 1", "actionable tip 2", "actionable tip 3"]}. Tips are concrete and kind; no amount in the verdict.'
+          : 'Réponds uniquement par un objet JSON, sans texte autour : {"avis": "verdict de 10 mots maximum", "conseils": ["conseil concret 1", "conseil concret 2", "conseil concret 3"]}. Les conseils sont concrets et bienveillants ; aucun montant dans le verdict.',
     );
     return buffer.toString();
   }

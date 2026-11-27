@@ -19,6 +19,7 @@ import '../../data/models/third_party.dart';
 import '../../data/models/transaction_record.dart';
 import '../security/aes_box.dart';
 import '../state/akiba_settings.dart';
+import 'backup_code.dart';
 import 'google_account.dart';
 
 /// Étapes d'une sauvegarde ou d'une restauration, pour l'animation de suivi.
@@ -95,7 +96,7 @@ class BackupService {
   final FlutterSecureStorage _storage;
   final List<int>? _keyOverride;
 
-  static const int formatVersion = 3;
+  static const int formatVersion = 4;
   static const int keyLength = 32;
   static const int _pbkdf2Iterations = 120000;
   static const String _applicationSalt = 'AKIBA|backup|AES-256-GCM|v3';
@@ -109,6 +110,9 @@ class BackupService {
     'master_url',
     'master_token',
     'restore_pending_at',
+    // Marqueur local d'une sauvegarde en attente : il ne doit jamais voyager
+    // dans une enveloppe, sinon une restauration le recopierait.
+    'auto_backup_pending_at',
     'ai_api_key_sealed',
     'ai_api_key_updated_at',
     'profile_photo_updated_at',
@@ -138,12 +142,27 @@ class BackupService {
 
   // ------------------------------------------------------------------ Créer
 
+  /// Crée une enveloppe chiffrée.
+  ///
+  /// Trois dérivations possibles, dans cet ordre :
+  /// 1. un **code à 4 chiffres** (serveur Home Lab) : la clé est dérivée du code
+  ///    et d'un sel aléatoire, donc l'enveloppe se rouvre sur n'importe quel
+  ///    appareil avec le même code, sans compte Google ;
+  /// 2. le compte Google connecté (Drive), pour rester portable ;
+  /// 3. la clé de l'appareil, quand aucune identité n'est disponible.
   Future<Map<String, dynamic>> createEnvelope({
     required String deviceId,
     GoogleAccount account = GoogleAccount.none,
+    String code = '',
     void Function(BackupStage)? onStage,
   }) async {
     onStage?.call(BackupStage.preparing);
+    final String backupCode = normalizeBackupCode(code);
+    if (backupCode.isNotEmpty && !isValidBackupCode(backupCode)) {
+      throw const BackupException(
+        'Le code de sauvegarde doit comporter exactement 4 chiffres.',
+      );
+    }
     final Map<String, dynamic> payload = await collectPayload();
     final List<int> plain = utf8.encode(jsonEncode(payload));
     // Identité canonique : identifiant Google stable normalisé, à défaut
@@ -151,11 +170,15 @@ class BackupService {
     // jamais écrite dans l'enveloppe.
     final List<String> identities = account.keyCandidates;
     final String identity = identities.isEmpty ? '' : identities.first;
-    final bool perAccount = identity.isNotEmpty && _keyOverride == null;
-    final List<int> salt = perAccount
+    final bool perCode = backupCode.isNotEmpty;
+    final bool perAccount =
+        !perCode && identity.isNotEmpty && _keyOverride == null;
+    final List<int> salt = (perCode || perAccount)
         ? List<int>.generate(16, (_) => Random.secure().nextInt(256))
         : const <int>[];
-    final List<int> key = perAccount
+    final List<int> key = perCode
+        ? _deriveKey(_codeIdentity(backupCode), salt)
+        : perAccount
         ? _deriveKey(identity, salt)
         : await _key(create: true);
     if (key.length != keyLength) {
@@ -170,9 +193,11 @@ class BackupService {
 
     return <String, dynamic>{
       'format': 'akiba-backup',
-      'version': perAccount ? 3 : 2,
+      'version': perCode ? 4 : (perAccount ? 3 : 2),
       'cipher': 'AES-256-GCM',
-      'kdf': perAccount ? 'PBKDF2-HMAC-SHA256' : 'device-key',
+      'kdf': perCode
+          ? 'PBKDF2-CODE'
+          : (perAccount ? 'PBKDF2-HMAC-SHA256' : 'device-key'),
       if (salt.isNotEmpty) 'salt': base64Encode(salt),
       if (perAccount) 'account': account.toJson(),
       'keyId': hash.sha256.convert(key).toString().substring(0, 16),
@@ -241,10 +266,42 @@ class BackupService {
   Future<Map<String, dynamic>> decryptEnvelope(
     Map<String, dynamic> envelope, {
     GoogleAccount account = GoogleAccount.none,
+    String code = '',
     void Function(BackupStage)? onStage,
   }) async {
     _checkEnvelope(envelope);
     final String kdf = envelope['kdf'] as String? ?? 'device-key';
+    if (kdf == 'PBKDF2-CODE') {
+      final List<int> salt = _envelopeSalt(envelope);
+      final String backupCode = normalizeBackupCode(code);
+      if (backupCode.isEmpty) {
+        throw const BackupException(
+          'Cette sauvegarde est protégée par un code à 4 chiffres : '
+          'saisissez-le pour la restaurer.',
+          codeRequired: true,
+        );
+      }
+      if (!isValidBackupCode(backupCode)) {
+        throw const BackupException(
+          'Le code de sauvegarde comporte exactement 4 chiffres.',
+          codeRequired: true,
+        );
+      }
+      final List<int> key = _deriveKey(_codeIdentity(backupCode), salt);
+      onStage?.call(BackupStage.decrypting);
+      if (!_keyFits(envelope, key)) throw _codeMismatch();
+      final String? clear = await AesBox.open(
+        envelope['ciphertext'] as String,
+        key,
+      );
+      if (clear == null) throw _codeMismatch();
+      final String expected = envelope['sha256'] as String? ?? '';
+      if (hash.sha256.convert(utf8.encode(clear)).toString() != expected) {
+        throw const BackupException('Empreinte de sauvegarde invalide.');
+      }
+      onStage?.call(BackupStage.verifying);
+      return jsonDecode(clear) as Map<String, dynamic>;
+    }
     if (kdf == 'PBKDF2-HMAC-SHA256') {
       final Object? rawSalt = envelope['salt'];
       if (rawSalt is! String) {
@@ -375,12 +432,14 @@ class BackupService {
   Future<Map<String, int>> restore(
     Map<String, dynamic> envelope, {
     GoogleAccount account = GoogleAccount.none,
+    String code = '',
     void Function(BackupStage)? onStage,
   }) async {
     onStage?.call(BackupStage.downloading);
     final Map<String, dynamic> payload = await decryptEnvelope(
       envelope,
       account: account,
+      code: code,
       onStage: onStage,
     );
 
@@ -525,26 +584,46 @@ class BackupService {
         request.headers.set('Authorization', 'Bearer ${token.trim()}');
       }
       request.headers.set('X-Akiba-Backup', 'AES-256-GCM');
-      request.write(jsonEncode(envelope));
+      // UTF-8 explicite : l'enveloppe contient des libellés accentués (noms de
+      // tiers, catégories). Sans charset, `write` encoderait en latin1 et le
+      // serveur recevrait un JSON invalide.
+      request.add(utf8.encode(jsonEncode(envelope)));
       final HttpClientResponse response = await request.close().timeout(
         const Duration(seconds: 20),
       );
-      await response.drain<void>();
+      // Le corps est lu pour récupérer le motif donné par le serveur (par
+      // exemple « Jeton invalide ») : un 401 muet n'aide personne.
+      final String body = await _readBody(response, maxBytes: 16384);
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        final String? detail = serverDetail(body, secret: token);
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          throw BackupException(_accessMessage(response.statusCode, detail));
+        }
         throw BackupException(
-          'Le serveur a refusé la sauvegarde (HTTP ${response.statusCode}).',
+          'Le serveur a refusé la sauvegarde (HTTP ${response.statusCode}).'
+          '${detail == null ? '' : ' $detail'}',
         );
       }
       onStage?.call(BackupStage.verifying);
       return uri.toString();
     } on BackupException {
       rethrow;
+    } on HandshakeException {
+      throw const BackupException(
+        'Certificat HTTPS refusé : utilisez un certificat reconnu par '
+        'l’appareil, ou l’adresse http:// sur le réseau local.',
+      );
     } on SocketException {
       throw const BackupException(
         'Serveur injoignable : vérifiez l’adresse et le Wi-Fi.',
       );
     } on TimeoutException {
       throw const BackupException('Le serveur n’a pas répondu à temps.');
+    } on HttpException catch (error) {
+      throw BackupException(
+        'Connexion interrompue (${error.message}) : vérifiez le schéma '
+        'http/https et le port du serveur.',
+      );
     } finally {
       client.close(force: true);
     }
@@ -567,25 +646,42 @@ class BackupService {
       final HttpClientResponse response = await request.close().timeout(
         const Duration(seconds: 20),
       );
-      final String body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 20));
-      if (response.statusCode == 404) return null;
+      final String body = await _readBody(response);
+      // 404 et 204 signifient « aucune sauvegarde » : un corps vide ne doit
+      // jamais être analysé, sinon l'utilisateur lit « format non reconnu »
+      // alors qu'il n'y a simplement rien à restaurer.
+      if (response.statusCode == 404 || response.statusCode == 204) {
+        return null;
+      }
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        final String? detail = serverDetail(body, secret: token);
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          throw BackupException(_accessMessage(response.statusCode, detail));
+        }
         throw BackupException(
-          'Lecture impossible (HTTP ${response.statusCode}).',
+          'Lecture impossible (HTTP ${response.statusCode}).'
+          '${detail == null ? '' : ' $detail'}',
         );
       }
-      return jsonDecode(body) as Map<String, dynamic>;
+      if (body.trim().isEmpty) return null;
+      return decodeRemoteBackup(body);
     } on BackupException {
       rethrow;
     } on FormatException {
       throw const BackupException('Réponse du serveur illisible.');
+    } on HandshakeException {
+      throw const BackupException(
+        'Certificat HTTPS refusé : vérifiez le certificat du serveur.',
+      );
     } on SocketException {
       throw const BackupException('Serveur injoignable.');
     } on TimeoutException {
       throw const BackupException('Le serveur n’a pas répondu à temps.');
+    } on HttpException catch (error) {
+      throw BackupException(
+        'Connexion interrompue (${error.message}) : vérifiez l’adresse et le '
+        'port du serveur.',
+      );
     } finally {
       client.close(force: true);
     }
@@ -624,12 +720,16 @@ class BackupService {
       final HttpClientResponse response = await request.close().timeout(
         const Duration(seconds: 15),
       );
-      // Le corps n'est pas nécessaire : on le vide pour libérer la connexion.
-      await response.drain<void>().timeout(const Duration(seconds: 10));
+      // Le corps porte le motif d'un refus (« Jeton invalide », « Jeton
+      // manquant ») : c'est exactement ce que la personne doit lire pour
+      // corriger son jeton.
+      final String body = await _readBody(response, maxBytes: 8192);
       final Duration latency = watch.elapsed;
       final int status = response.statusCode;
       final bool withToken = token.trim().isNotEmpty;
       final String timing = ' en ${latency.inMilliseconds} ms';
+      final String? detail = serverDetail(body, secret: token);
+      final String reason = detail == null ? '' : ' $detail';
       if (status == 200 || status == 204) {
         return HomeLabProbe(
           reachable: true,
@@ -660,10 +760,10 @@ class BackupService {
           statusCode: status,
           latency: latency,
           message: withToken
-              ? 'Serveur joignable$timing, mais le jeton est refusé '
-                    '(HTTP $status). Vérifiez le jeton d’accès Home Lab.'
-              : 'Communication OK$timing : serveur joignable, il exige un '
-                    'jeton (HTTP $status). Passez à l’étape 2.',
+              ? _accessMessage(status, detail)
+              : 'Serveur joignable$timing, mais il exige un jeton '
+                    '(HTTP $status).$reason Passez à l’étape 2 : saisissez le '
+                    'jeton, puis « Enregistrer et activer ».',
         );
       }
       return HomeLabProbe(
@@ -672,8 +772,8 @@ class BackupService {
         statusCode: status,
         latency: latency,
         message:
-            'Serveur joignable$timing, mais il répond HTTP $status : vérifiez '
-            'l’adresse exacte de la sauvegarde AKIBA.',
+            'Serveur joignable$timing, mais il répond HTTP $status.$reason '
+            'Vérifiez l’adresse exacte de la sauvegarde AKIBA.',
       );
     } on HandshakeException {
       return const HomeLabProbe(
@@ -762,6 +862,40 @@ class BackupService {
     return Uri.parse(normalized);
   }
 
+  /// Sel de l'enveloppe, validé avant toute dérivation.
+  List<int> _envelopeSalt(Map<String, dynamic> envelope) {
+    final Object? rawSalt = envelope['salt'];
+    if (rawSalt is! String) {
+      throw const BackupException('Sel de sauvegarde manquant ou invalide.');
+    }
+    try {
+      final List<int> salt = base64Decode(rawSalt);
+      if (salt.length != 16) {
+        throw const BackupException('Sel de sauvegarde invalide.');
+      }
+      return salt;
+    } on FormatException {
+      throw const BackupException('Sel de sauvegarde invalide.');
+    }
+  }
+
+  /// Séparation de domaine : un code de sauvegarde ne peut jamais produire la
+  /// même clé qu'une identité Google, même si les deux chaînes se ressemblent.
+  static String _codeIdentity(String code) => 'code|$code';
+
+  /// Code refusé : le message dit quoi faire, sans exposer le code saisi.
+  ///
+  /// Le code à 4 chiffres n'est pas une phrase secrète : il protège la
+  /// sauvegarde contre une lecture accidentelle, pas contre un attaquant qui
+  /// détiendrait le fichier et disposerait de temps de calcul. Ce compromis est
+  /// documenté (REVUE_SECURITE.md) et remplace la dépendance au compte Google.
+  BackupException _codeMismatch() => const BackupException(
+    'Code à 4 chiffres incorrect. Si vous l’avez oublié, cette sauvegarde ne '
+    'peut pas être rouverte : créez une nouvelle sauvegarde avec un nouveau '
+    'code, elle remplacera celle du serveur et vous repartirez de zéro.',
+    codeWrong: true,
+  );
+
   List<int> _deriveKey(String googleAccountId, List<int> salt) {
     if (googleAccountId.trim().isEmpty || salt.length != 16) {
       throw const BackupException(
@@ -785,7 +919,142 @@ class BackupService {
 
   // ------------------------------------------------------------------ Outils
 
+  /// Analyse le corps renvoyé par un serveur de sauvegarde.
+  ///
+  /// Tolérant par construction : un corps vide vaut `null`, une chaîne JSON
+  /// qui contient l'enveloppe est redécodée, et une enveloppe rangée sous
+  /// `backup` / `envelope` / `latest` / `data` est dépliée. Un corps qui n'est
+  /// pas une enveloppe AKIBA donne un message explicite, distinct du
+  /// « format non reconnu » réservé à une enveloppe réellement altérée.
+  static Map<String, dynamic>? decodeRemoteBackup(String body) {
+    final String text = body.trim();
+    if (text.isEmpty) return null;
+    Object? decoded;
+    try {
+      decoded = jsonDecode(text);
+    } on FormatException {
+      if (text.startsWith('<')) {
+        throw const BackupException(
+          'Le serveur a renvoyé une page web au lieu d’une sauvegarde : '
+          'vérifiez l’adresse exacte (chemin compris).',
+        );
+      }
+      throw const BackupException('Réponse du serveur illisible.');
+    }
+
+    // Certains proxys renvoient le JSON sous forme de chaîne échappée.
+    Object? value = decoded;
+    for (int pass = 0; pass < 2 && value is String; pass++) {
+      try {
+        value = jsonDecode(value);
+      } on FormatException {
+        throw const BackupException('Réponse du serveur illisible.');
+      }
+    }
+    if (value is! Map) {
+      throw const BackupException(
+        'Le serveur n’a pas renvoyé une sauvegarde AKIBA : vérifiez '
+        'l’adresse et le jeton.',
+      );
+    }
+
+    Map<String, dynamic> envelope = Map<String, dynamic>.from(value);
+    if (envelope['format'] != 'akiba-backup') {
+      for (final String key in const <String>[
+        'backup',
+        'envelope',
+        'latest',
+        'data',
+      ]) {
+        final Object? nested = envelope[key];
+        if (nested is Map && nested['format'] == 'akiba-backup') {
+          envelope = Map<String, dynamic>.from(nested);
+          break;
+        }
+      }
+    }
+    if (envelope['format'] != 'akiba-backup') {
+      throw const BackupException(
+        'Le serveur n’a pas renvoyé une sauvegarde AKIBA : vérifiez '
+        'l’adresse et le jeton de cet utilisateur.',
+      );
+    }
+    return envelope;
+  }
+
   static String _two(int value) => value.toString().padLeft(2, '0');
+
+  /// Motif renvoyé par le serveur (`{"detail": "…"}`), s'il est lisible.
+  ///
+  /// Il permet de distinguer « jeton manquant », « jeton invalide » et « aucun
+  /// jeton configuré » — les trois causes d'un 401 — au lieu d'un code HTTP
+  /// seul. Aucun corps binaire ni page web n'est repris.
+  static String? serverDetail(String body, {String secret = ''}) {
+    final String text = body.trim();
+    if (text.isEmpty || text.startsWith('<')) return null;
+    try {
+      final Object? decoded = jsonDecode(text);
+      if (decoded is Map) {
+        final Object? detail = decoded['detail'];
+        if (detail is String && detail.trim().isNotEmpty) {
+          return _clipDetail(_redact(detail.trim(), secret));
+        }
+        if (detail is List && detail.isNotEmpty) {
+          final Object? first = detail.first;
+          if (first is Map && first['msg'] is String) {
+            return _clipDetail(
+              _redact((first['msg'] as String).trim(), secret),
+            );
+          }
+        }
+      }
+    } on FormatException {
+      // Corps non JSON : aucun motif exploitable.
+    }
+    return null;
+  }
+
+  static String _clipDetail(String value) =>
+      value.length <= 180 ? value : '${value.substring(0, 177)}…';
+
+  /// Retire un secret d'un texte destiné à l'écran.
+  ///
+  /// Un serveur ou un proxy peut recopier l'en-tête reçu dans son message
+  /// d'erreur : sans ce filtre, le jeton s'afficherait dans l'application.
+  static String _redact(String value, String secret) {
+    final String token = secret.trim();
+    if (token.length < 4) return value;
+    return value.replaceAll(token, '••••');
+  }
+
+  /// Corps de la réponse, décodé en UTF-8.
+  ///
+  /// [maxBytes] plafonne la lecture quand seul un motif d'erreur est cherché
+  /// (réponse à un envoi, test de communication) : inutile d'absorber la page
+  /// entière d'un proxy captif. Sans plafond, la sauvegarde est lue en entier.
+  static Future<String> _readBody(
+    HttpClientResponse response, {
+    int? maxBytes,
+  }) async {
+    final BytesBuilder bytes = BytesBuilder(copy: false);
+    await for (final List<int> chunk in response.timeout(
+      const Duration(seconds: 20),
+    )) {
+      bytes.add(chunk);
+      final int? cap = maxBytes;
+      if (cap != null && bytes.length >= cap) break;
+    }
+    return utf8.decode(bytes.takeBytes(), allowMalformed: true);
+  }
+
+  /// Refus d'authentification expliqué, avec le motif venu du serveur.
+  static String _accessMessage(int status, String? detail) {
+    final String reason = detail == null || detail.isEmpty ? '' : ' $detail';
+    return 'Jeton refusé par le serveur (HTTP $status).$reason '
+        'Vérifiez le jeton d’accès (s’il est partagé, gardez « :mon_nom ») : '
+        'côté serveur, SHARED_TOKEN doit être identique et le conteneur recréé '
+        '(docker compose up -d).';
+  }
 
   /// Métadonnées lisibles sans clé.
   static BackupMetadata metadata(Map<String, dynamic> envelope) {
@@ -830,9 +1099,19 @@ class BackupMetadata {
 }
 
 class BackupException implements Exception {
-  const BackupException(this.message);
+  const BackupException(
+    this.message, {
+    this.codeRequired = false,
+    this.codeWrong = false,
+  });
 
   final String message;
+
+  /// Vrai quand le code à 4 chiffres manque pour ouvrir l'enveloppe.
+  final bool codeRequired;
+
+  /// Vrai quand le code saisi n'ouvre pas l'enveloppe.
+  final bool codeWrong;
 
   @override
   String toString() => message;

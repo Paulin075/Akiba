@@ -15,6 +15,10 @@ class AiDraft {
     this.fromBrand,
     this.toBrand,
     this.isSavings = false,
+    this.isSavingsGoal = false,
+    this.dailyAmount = 0,
+    this.goalName,
+    this.targetAmount = 0,
     this.debtDirection,
     this.counterparty,
     this.confidence = 0.5,
@@ -31,6 +35,20 @@ class AiDraft {
 
   /// Versement d'épargne détecté (« mets 5 000 de côté »).
   bool isSavings;
+
+  /// Objectif d'épargne récurrent (« 100 FCFA par jour pour un moniteur »).
+  /// Dans ce cas [amount] et [dailyAmount] valent le versement quotidien ;
+  /// aucune dépense n'est enregistrée : un coffre est créé.
+  bool isSavingsGoal;
+
+  /// Montant mis de côté à chaque versement quotidien.
+  int dailyAmount;
+
+  /// Nom de l'objectif (« Moniteur »), sans montant ni phrase entière.
+  String? goalName;
+
+  /// Prix de l'objectif, quand la phrase le donne explicitement.
+  int targetAmount;
 
   /// « owedToMe » (on me doit) ou « iOwe » (je dois), sinon `null`.
   String? debtDirection;
@@ -120,9 +138,44 @@ abstract final class AiCommandParser {
     final bool savings =
         !owedToMe &&
         !iOwe &&
+        (RegExp(r'[ée]pargn|coffre|tirelire| economis').hasMatch(lower) ||
+            RegExp(r'\b(?:mets?|mettre|met)\b.*de c[ôo]t[ée]').hasMatch(lower));
+
+    // Objectif d'épargne récurrent : « 100 francs par jour pour un moniteur ».
+    // Le montant de la phrase est alors le versement quotidien, pas une
+    // dépense : l'analyse locale le décide avant tout modèle distant, sinon
+    // une telle phrase était comprise comme une sortie « Alimentation ».
+    final bool recurring =
+        savings &&
         RegExp(
-          r'[ée]pargn|mets? de c[ôo]t[ée]|coffre|tirelire| economis',
+          r'\b(?:par|chaque|tous les)\s+jours?\b|quotidien|'
+          r'chaque\s+journ[ée]e',
         ).hasMatch(lower);
+    if (recurring) {
+      final DateTime base = now ?? DateTime.now();
+      // Le premier versement est daté au jour (pas à l'heure de la phrase) :
+      // « demain » devient le lendemain à minuit, comme un rappel quotidien.
+      final DateTime start = lower.contains('demain')
+          ? DateTime(
+              base.year,
+              base.month,
+              base.day,
+            ).add(const Duration(days: 1))
+          : base;
+      final int daily = _amountBeforeRate(lower) ?? amount;
+      final String? goal = _goalName(text);
+      return AiDraft(
+        kind: TransactionKind.savings,
+        amount: daily,
+        note: goal ?? 'Objectif',
+        isSavings: true,
+        isSavingsGoal: true,
+        dailyAmount: daily,
+        goalName: goal ?? 'Objectif',
+        occurredAt: start,
+        confidence: goal != null ? 0.85 : 0.7,
+      );
+    }
 
     TransactionKind kind = TransactionKind.expense;
     if (savings) {
@@ -262,6 +315,97 @@ abstract final class AiCommandParser {
 
   static String _capitalise(String word) =>
       word[0].toUpperCase() + word.substring(1).toLowerCase();
+
+  /// Montant placé juste avant « par jour » / « chaque jour ».
+  ///
+  /// « mettre 100 francs par jour » donne 100, même si la phrase contient un
+  /// autre nombre (prix de l'objet, échéance).
+  static int? _amountBeforeRate(String text) {
+    final RegExpMatch? match = RegExp(
+      r'(\d[\d .]*)\s*(?:FCFA|XOF|CFA|francs?)?\s*'
+      r'(?:par|chaque|tous les)\s+jours?',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (match == null) return null;
+    final String digits = match
+        .group(1)!
+        .replaceAll(RegExp(r'[ .]'), '')
+        .replaceAll(',', '');
+    final int value = int.tryParse(digits) ?? 0;
+    return value > 0 ? value : null;
+  }
+
+  /// Nom de l'objectif acheté : « pour me payer un moniteur » → « Moniteur ».
+  ///
+  /// Seuls les deux premiers mots utiles sont gardés : le reste de la phrase
+  /// (« donc tu peux créer… ») n'est jamais un nom de coffre.
+  static String? _goalName(String text) {
+    final RegExpMatch? match = RegExp(
+      r"(?:m['’]acheter|me payer|acheter|payer|pour)\s+"
+      r"(?:un|une|mon|ma|mes|le|la|les|des|du)\s+"
+      r"([\p{L}][\p{L}’' -]{1,40})",
+      caseSensitive: false,
+      unicode: true,
+    ).firstMatch(text);
+    if (match == null) return null;
+    const Set<String> stop = <String>{
+      'donc',
+      'pour',
+      'afin',
+      'et',
+      'puis',
+      'tu',
+      'je',
+      'il',
+      'elle',
+      'que',
+      'qui',
+      'car',
+      'ainsi',
+      'avec',
+      'dans',
+      'si',
+      'en',
+      'a',
+      'à',
+      'de',
+      'du',
+      'des',
+      'mon',
+      'ma',
+      'mes',
+      'le',
+      'la',
+      'les',
+      'un',
+      'une',
+      'peux',
+      'peut',
+      'pouvoir',
+      'veux',
+      'veut',
+      'dois',
+      'doit',
+      'faut',
+      'créer',
+      'creer',
+      'commencer',
+      'économiser',
+      'economiser',
+    };
+    // Les mots sont pris dans l'ordre et s'arrêtent au premier mot grammatical :
+    // « moniteur donc tu peux… » ne garde que « moniteur ».
+    final List<String> words = <String>[];
+    for (final String raw in match.group(1)!.split(RegExp(r'\s+'))) {
+      final String word = raw.trim();
+      if (word.isEmpty) continue;
+      if (stop.contains(word.toLowerCase())) break;
+      words.add(word);
+      if (words.length == 2) break;
+    }
+    if (words.isEmpty) return null;
+    return words.map(_capitalise).join(' ');
+  }
 
   /// Extrait un montant : « 5 000 », « 5000 FCFA », « 5k », « 2,5k ».
   static int _extractAmount(String text) {

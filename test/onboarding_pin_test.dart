@@ -44,8 +44,11 @@ void main() {
     expect(find.text('Sauvegarde et restauration'), findsOneWidget);
     expect(find.text('Comment vous appelez-vous ?'), findsNothing);
 
-    // E3 -> E4 devise -> E5 identité (aucun compte Google lié ici).
+    // E3 -> serveur de sauvegarde local (aucun compte Google lié ici),
+    // puis E4 devise -> E5 identité.
     await tapNext();
+    expect(find.text('Serveur de sauvegarde'), findsOneWidget);
+    await tapNext(label: 'Continuer sans restaurer');
     await tapNext();
     expect(find.text('Comment vous appelez-vous ?'), findsOneWidget);
     await tester.enterText(find.byType(TextField).at(0), 'Ama');

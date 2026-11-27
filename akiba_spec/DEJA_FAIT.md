@@ -2068,3 +2068,61 @@ test/core_test.dart` — 65 tests passés · `flutter build apk --debug` —
 **Limites** : le rendu réel de la carte conseil et de la carte « Avis & analyse
 IA » du PDF n'a pas été observé (aucune saisie synthétique dans l'application) ;
 une réponse Gemini réelle n'a pas été rejouée.
+
+### 10. Assistant : épargne récurrente et actions réellement exécutées (27/11/2026)
+
+**Constat** : « je veux commencer à mettre 100 francs par jour de côté pour
+pouvoir me payer un moniteur… » produisait une sortie de 100 FCFA en catégorie
+« Alimentation ». Le montant était lu comme une dépense, sans coffre ni
+projection : l'assistant ne « faisait » donc pas ce qui était demandé.
+
+| Correctif | Détail |
+| --- | --- |
+| `AiCommandParser` | Nouveau plan d'épargne : un montant suivi de « par jour » / « chaque jour » / « tous les jours », avec un verbe d'épargne, produit un brouillon `isSavingsGoal`. Le montant quotidien est celui **juste avant** le rythme (pas le prix de l'objet cité plus loin). |
+| Nom de l'objectif | Extrait de « me payer un moniteur » → `Moniteur`, en s'arrêtant au premier mot grammatical (« donc », « pour », « tu »…), jamais la phrase entière. |
+| Premier versement | « demain » devient le lendemain à minuit (`occurredAt`) ; sans date, le jour même. |
+| Priorité | `_analyse` applique cette lecture **locale avant tout modèle distant** : un modèle ne peut plus requalifier l'épargne en dépense, comme c'était déjà le cas pour les créances et dettes. |
+| Carte dédiée | `_savingsGoalCard` : nom du coffre, prix de l'objectif, versement quotidien, date du premier versement, nombre de versements et date d'atteinte calculés en direct. Le bouton « Créer l'épargne » crée un `SavingsPot` de type `goal` et mémorise le rythme (`savings_plan_<id>`). Aucun débit n'est écrit. |
+| Projection | `SavingsProjection.dateForDailyPlan` et `depositsFor` : rythme fixe, objectif déjà atteint, rythme nul et au-delà de dix ans traités sans fausse promesse. |
+| Modèle distant | Action `savings_goal` ajoutée à la consigne JSON (`daily_amount`, `target`, `goal`) et relue par `_readRemote`. |
+
+**Actions que l'assistant exécute** (toujours relues dans une carte, jamais à
+l'aveugle) : dépense, entrée, transfert entre deux comptes (deux écritures
+symétriques), argent de tiers isolé, créance / dette et leur règlement,
+versement d'épargne, et désormais objectif d'épargne récurrent. Chaque action
+passe par les services existants (`AkibaStore`), donc les invariants
+(trésorerie, tiers, budgets, dettes) restent ceux du reste de l'application.
+
+**Tests** : `test/savings_plan_test.dart` (phrase réelle de l'utilisateur,
+montant quotidien, nom, « demain » ; versement unique et dépense ordinaire non
+confondus ; projections).
+
+**Limites** : aucun prélèvement automatique n'est créé (le premier versement
+reste un geste volontaire) ; l'assistant n'automatise pas encore d'autres écrans
+( budgets, réglages, thèmes) : il exécute les écritures financières listées ci-dessus.
+
+### 11. Sauvegarde du serveur : code à 4 chiffres, sans compte Google (27/11/2026)
+
+**Constat** : à la restauration depuis le serveur, AKIBA répondait « Cette
+sauvegarde appartient au compte Google amahpaulin30@gmail.com : connectez ce
+compte pour la restaurer. » Or le jeton du serveur est le seul lien attendu ;
+imposer une connexion Google contredisait l'usage hors ligne.
+
+| Correctif | Détail |
+| --- | --- |
+| `lib/core/backup/backup_code.dart` (nouveau) | `BackupCodeStore` (coffre système `akiba_backup_code`, version mémoire pour les tests), `isValidBackupCode` (exactement 4 chiffres), normalisation des espaces. |
+| Enveloppe version 4 | `kdf: "PBKDF2-CODE"` + sel aléatoire de 16 octets, clé dérivée du code (PBKDF2-SHA256, 120 000 tours) ; aucun champ `account`, le code n'est jamais écrit. |
+| Compatibilité | Les enveloppes `device-key` (v2) et Google (v3) restent lisibles par leurs chemins respectifs : une ancienne sauvegarde Drive continue de demander le compte, une ancienne sauvegarde locale sa clé d'appareil. |
+| Configuration | Le centre de sauvegarde Home Lab demande le code à l'étape 2 ; `HomeLabSetup.activateToken` refuse un jeton valide sans code, protège le code dans le coffre et l'utilise pour la première sauvegarde. La sauvegarde automatique au démarrage lit le même code. |
+| Restauration | La page d'onboarding et le centre de sauvegarde demandent le code ; un dialogue dédié dans « Restaurer » préremplit le code du coffre. Code absent → message `codeRequired` ; code faux → message `codeWrong` (« Code à 4 chiffres incorrect… créez une nouvelle sauvegarde avec un nouveau code… repartirez de zéro »). |
+| Oubli | Aucun chemin de récupération : une nouvelle sauvegarde avec un nouveau code remplace `latest.json` sur le serveur (historique conservé mais illisible). C'est le comportement demandé. |
+
+**Tests** : `test/backup_code_test.dart` (version 4, absence de compte et de
+code en clair, réouverture avec le même code, code absent, code faux, longueur
+invalide, compatibilité `device-key` et Google) ; `test/home_lab_setup_test.dart`
+(code obligatoire, code conservé hors réglages) ; parcours d'onboarding inchangé.
+
+**Limites** : le code n'a que 10 000 valeurs ; il protège d'une lecture
+accidentelle, pas d'un attaquant qui détiendrait le fichier et beaucoup de temps
+de calcul (voir `REVUE_SECURITE.md`). Le parcours réel sur téléphone contre le
+serveur du porteur (configuration, restauration, code oublié) reste à rejouer.

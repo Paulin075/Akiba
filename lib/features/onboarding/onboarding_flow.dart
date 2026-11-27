@@ -31,6 +31,7 @@ import '../../core/widgets/theme_swatch.dart';
 import '../../data/akiba_store.dart';
 import '../../data/models/account.dart';
 import '../../data/models/transaction_record.dart';
+import 'local_restore_page.dart';
 
 /// Parcours d'onboarding E1 → E11.
 ///
@@ -87,6 +88,8 @@ class _OnboardingFlowState extends State<OnboardingFlow>
   BackupMetadata? _driveMeta;
   bool _googleChecked = false;
   bool _restoring = false;
+  bool _restored = false;
+  bool _localRestoreOffered = false;
   final ValueNotifier<BackupStage> _backupStage = ValueNotifier<BackupStage>(
     BackupStage.idle,
   );
@@ -161,6 +164,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     _permissionSms = widget.settings.flag('permission_sms');
     _permissionMicro = widget.settings.flag('permission_micro');
     _permissionWifi = widget.settings.flag('permission_wifi');
+    _restored = widget.settings.flag('restore_done');
     for (final TextEditingController controller in _openings.values) {
       controller.addListener(_recomputeOpeningTotal);
     }
@@ -256,8 +260,10 @@ class _OnboardingFlowState extends State<OnboardingFlow>
             onStage: (BackupStage stage) => _backupStage.value = stage,
           );
       widget.revision.bump();
+      await widget.settings.setFlag('restore_done', true);
       if (!mounted) return;
       setState(() {
+        _restored = true;
         _error =
             'Restauration terminée : ${restored['transactions']} mouvements et '
             '${restored['accounts']} comptes ajoutés.';
@@ -298,8 +304,10 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         onStage: (BackupStage stage) => _backupStage.value = stage,
       );
       widget.revision.bump();
+      await widget.settings.setFlag('restore_done', true);
       if (!mounted) return;
       setState(() {
+        _restored = true;
         _error =
             'Sauvegarde locale restaurée : ${restored['transactions']} '
             'mouvements.';
@@ -313,6 +321,30 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     } finally {
       if (mounted) setState(() => _restoring = false);
     }
+  }
+
+  /// Ouvre la page dédiée au serveur de sauvegarde local (Home Lab).
+  ///
+  /// La page normalise l'adresse, cherche la sauvegarde et restaure dès
+  /// qu'une enveloppe valide est trouvée. Un retour `true` signifie qu'une
+  /// restauration a réellement eu lieu.
+  Future<bool> _openLocalRestore() async {
+    final bool? restored = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (BuildContext context) => LocalRestorePage(
+          store: widget.store,
+          settings: widget.settings,
+          onRestored: widget.revision.bump,
+        ),
+      ),
+    );
+    _localRestoreOffered = true;
+    if (restored == true) {
+      _restored = true;
+      widget.revision.bump();
+      if (mounted) setState(() {});
+    }
+    return restored == true;
   }
 
   void _setPermission(String kind, bool value) {
@@ -571,12 +603,24 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     }
     // Compte Google lié : prénom et nom déjà récupérés et modifiables à
     // l'étape Google. On ne redemande donc pas la saisie manuelle.
+    // Sans Google et sans restauration, AKIBA propose la page du serveur de
+    // sauvegarde local avant d'avancer (elle peut être ignorée).
+    if (_step == 2 &&
+        _googleEmail == null &&
+        !_restored &&
+        !_localRestoreOffered) {
+      await _openLocalRestore();
+      if (!mounted) return;
+    }
     final bool skipIdentity =
         _step == 3 &&
         _googleLinked &&
         _firstName.text.trim().length >= 2 &&
         _lastName.text.trim().isNotEmpty;
-    await _go(skipIdentity ? 2 : 1);
+    // Une sauvegarde restaurée contient déjà les comptes et leurs soldes :
+    // l'étape « combien avez-vous dans vos comptes » est sautée.
+    final bool skipOpenings = _step == 4 && _restored;
+    await _go(skipIdentity || skipOpenings ? 2 : 1);
   }
 
   /// Enregistre prénom et nom. À l'étape Google, une valeur vide ne remplace
@@ -1104,7 +1148,41 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     );
   }
 
+  /// Après une restauration (Google Drive ou serveur Home Lab), les comptes et
+  /// leurs soldes viennent de la sauvegarde : redemander les montants créerait
+  /// des mouvements de départ en double, sur des comptes déjà à jour.
+  Widget _accountsRestored(AkibaColors c) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _title(
+          c,
+          'Vos comptes sont déjà à jour',
+          'La sauvegarde restaurée contient vos comptes, leurs soldes et vos '
+              'mouvements : AKIBA ne vous redemande plus combien vous avez.',
+        ),
+        const SizedBox(height: AkibaSpacing.xl),
+        AkibaSurfaceCard(
+          child: Row(
+            children: <Widget>[
+              Icon(Icons.check_circle_rounded, size: 20, color: c.success),
+              const SizedBox(width: AkibaSpacing.sm),
+              Expanded(
+                child: Text(
+                  'Soldes repris de la sauvegarde. Continuez : vous arriverez '
+                  'directement sur votre tableau de bord.',
+                  style: AkibaTypography.body.copyWith(color: c.textMuted),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _accountsStep(AkibaColors c) {
+    if (_restored) return _accountsRestored(c);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -1298,6 +1376,62 @@ class _OnboardingFlowState extends State<OnboardingFlow>
             ],
           ),
         ),
+        if (_googleEmail == null) ...<Widget>[
+          const SizedBox(height: AkibaSpacing.lg),
+          AkibaSurfaceCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Icon(
+                      _restored
+                          ? Icons.check_circle_rounded
+                          : Icons.dns_rounded,
+                      size: 18,
+                      color: _restored ? c.success : c.textMuted,
+                    ),
+                    const SizedBox(width: AkibaSpacing.sm),
+                    Expanded(
+                      child: Text(
+                        _restored
+                            ? 'Sauvegarde restaurée'
+                            : 'Serveur de sauvegarde local',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: c.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AkibaSpacing.xs),
+                Text(
+                  _restored
+                      ? 'Vos mouvements ont été ajoutés sans supprimer les '
+                            'données déjà présentes.'
+                      : 'Sans Google, connectez votre serveur Home Lab sur le '
+                            'même Wi-Fi : adresse (IP) et jeton suffisent. '
+                            'AKIBA cherche la sauvegarde et la restaure '
+                            'automatiquement.',
+                  style: AkibaTypography.legend.copyWith(
+                    color: c.textMuted,
+                    height: 1.45,
+                  ),
+                ),
+                if (!_restored) ...<Widget>[
+                  const SizedBox(height: AkibaSpacing.md),
+                  OutlinedButton.icon(
+                    onPressed: _restoring ? null : _openLocalRestore,
+                    icon: const Icon(Icons.cloud_download_rounded, size: 18),
+                    label: const Text('Restaurer depuis mon serveur'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
         if (_googleLinked) ...<Widget>[
           const SizedBox(height: AkibaSpacing.lg),
           AkibaSurfaceCard(

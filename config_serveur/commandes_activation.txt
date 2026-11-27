@@ -1,0 +1,101 @@
+# =====================================================================
+# AKIBA — activation complète du serveur de sauvegarde (Ubuntu / CasaOS)
+# Copiez ce fichier sur le serveur, puis exécutez les blocs dans l'ordre.
+# Un SEUL jeton partagé suffit : chaque personne écrit JETON:son_nom.
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# 0. Se placer dans le dossier et vérifier Docker
+# ---------------------------------------------------------------------
+cd /DATA/AppData/akiba-backup
+docker --version
+docker compose version
+
+# ---------------------------------------------------------------------
+# 1. Créer l'arborescence (les 4 fichiers du dossier config_serveur
+#    doivent déjà être copiés ici : main.py, requirements.txt,
+#    Dockerfile, docker-compose.yml)
+# ---------------------------------------------------------------------
+sudo mkdir -p /DATA/AppData/akiba-backup/data
+ls -l main.py requirements.txt Dockerfile docker-compose.yml
+
+# ---------------------------------------------------------------------
+# 2. Générer UN seul jeton, pour tout le monde
+# ---------------------------------------------------------------------
+openssl rand -hex 32
+# Reportez cette valeur dans docker-compose.yml :
+#   SHARED_TOKEN: "LA_VALEUR_GENEREE"
+#
+# Chaque personne, dans AKIBA, saisira :  LA_VALEUR_GENEREE:son_nom
+#   -> data/backups/son_nom/      (dossiers séparés, un seul secret)
+# Sans nom (jeton seul) -> data/backups/default/
+#
+# Option (facultatif) : jetons dédiés, un par personne
+#   openssl rand -hex 32   # Alice
+#   openssl rand -hex 32   # Bob
+#   USER_TOKENS: "JETON_ALICE:alice,JETON_BOB:bob"
+
+# ---------------------------------------------------------------------
+# 3. Activer Docker au démarrage du serveur (redémarrage automatique)
+# ---------------------------------------------------------------------
+sudo systemctl enable docker
+sudo systemctl enable containerd 2>/dev/null || true
+
+# ---------------------------------------------------------------------
+# 4. Construire et démarrer le conteneur
+# ---------------------------------------------------------------------
+sudo docker compose up -d --build
+sudo docker compose ps
+sudo docker compose logs --tail=50 akiba-backup
+
+# ---------------------------------------------------------------------
+# 5. Ouvrir le port 8080 (seulement si ufw est actif)
+# ---------------------------------------------------------------------
+sudo ufw allow 8080/tcp
+sudo ufw status
+
+# ---------------------------------------------------------------------
+# 6. Tester le serveur (un nom par personne, même jeton)
+# ---------------------------------------------------------------------
+SHARED="LA_VALEUR_GENEREE"
+TOKEN="$SHARED:mamadou"
+TOKEN2="$SHARED:awa"
+
+curl -s http://127.0.0.1:8080/ping
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/health
+# -> {"status":"ok","user":"mamadou","shared_token":true,...}
+curl -i -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/
+# -> 404 tant qu'aucune sauvegarde n'a été envoyée (comportement attendu)
+
+# Envoi d'une enveloppe de test :
+echo '{"format":"akiba-backup","version":2,"cipher":"AES-256-GCM","ciphertext":"test","createdAt":"2026-11-26T10:00:00Z"}' > /tmp/enveloppe.json
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  --data-binary @/tmp/enveloppe.json http://127.0.0.1:8080/backup
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/backup
+# -> la même enveloppe, à l'octet près
+
+# Vérifier l'isolation : le SECOND nom ne doit rien voir (404)
+curl -i -H "Authorization: Bearer $TOKEN2" http://127.0.0.1:8080/backup
+# -> HTTP 404 : dossiers bien séparés
+
+# Vérifier les dossiers créés :
+sudo ls -l /DATA/AppData/akiba-backup/data/backups/
+
+# ---------------------------------------------------------------------
+# 7. Vérifier le redémarrage automatique (une seule fois)
+# ---------------------------------------------------------------------
+sudo reboot
+# après reconnexion :
+sudo docker ps --filter name=akiba-backup
+curl -s http://127.0.0.1:8080/ping
+
+# ---------------------------------------------------------------------
+# 8. Ajouter un utilisateur plus tard
+# ---------------------------------------------------------------------
+# Mode jeton partagé : RIEN à faire sur le serveur.
+#   La personne saisit dans AKIBA :  LE_JETON_PARTAGE:carol
+#   Son dossier data/backups/carol/ est créé au premier envoi.
+#
+# Mode jeton dédié : openssl rand -hex 32
+#   puis ajouter "NOUVEAU_JETON:carol" dans USER_TOKENS
+#   puis sudo docker compose up -d

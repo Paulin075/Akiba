@@ -41,11 +41,18 @@ class AiModel {
 /// Aucune clé n'est manipulée ici : tout est pur et testable hors réseau.
 abstract final class AiModelCatalog {
   /// Modèles proposés tant qu'aucune liste n'a été récupérée.
+  ///
+  /// Les alias `…-latest` sont préférés aux versions figées : Google les fait
+  /// pointer vers le modèle courant, alors qu'une version retirée (les 1.5 ne
+  /// répondent plus) provoque une erreur 404 au premier appel.
   static const List<AiModel> seeds = <AiModel>[
-    AiModel(id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash'),
-    AiModel(id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite'),
-    AiModel(id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash'),
-    AiModel(id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro'),
+    AiModel(id: 'gemini-flash-latest', label: 'Gemini Flash (à jour)'),
+    AiModel(
+      id: 'gemini-flash-lite-latest',
+      label: 'Gemini Flash Lite (à jour)',
+    ),
+    AiModel(id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash'),
+    AiModel(id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro'),
   ];
 
   /// Lit la réponse `models.list` et ne garde que les modèles qui savent

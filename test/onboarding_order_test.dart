@@ -58,20 +58,34 @@ void main() {
   testWidgets('la connexion Google précède la demande du prénom et du nom', (
     WidgetTester tester,
   ) async {
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     await mountAt(tester, 2);
+
+    Future<void> tapText(String label) async {
+      final Finder target = find.text(label);
+      await tester.ensureVisible(target);
+      await tester.pump();
+      await tester.tap(target);
+      await tester.pumpAndSettle();
+    }
 
     expect(find.text('Sauvegarde et restauration'), findsOneWidget);
     expect(find.text('Se connecter avec Google'), findsOneWidget);
     expect(find.text('Comment vous appelez-vous ?'), findsNothing);
     expect(find.text('Étape 3 sur 11'), findsOneWidget);
 
-    // Sans connexion Google, la saisie manuelle arrive après la devise.
-    await tester.tap(find.text('Continuer'));
-    await tester.pumpAndSettle();
+    // Sans connexion Google, AKIBA propose le serveur de sauvegarde local
+    // avant de passer à la devise. La page reste facultative.
+    await tapText('Continuer');
+    expect(find.text('Serveur de sauvegarde'), findsOneWidget);
+    expect(find.text('Continuer sans restaurer'), findsOneWidget);
+
+    await tapText('Continuer sans restaurer');
     expect(find.text('Votre devise et votre fuseau'), findsOneWidget);
 
-    await tester.tap(find.text('Continuer'));
-    await tester.pumpAndSettle();
+    await tapText('Continuer');
     expect(find.text('Comment vous appelez-vous ?'), findsOneWidget);
     expect(find.text('Votre prénom apparaîtra sur l’accueil.'), findsOneWidget);
   });

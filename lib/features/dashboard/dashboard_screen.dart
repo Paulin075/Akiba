@@ -61,6 +61,14 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   late Future<DashboardSnapshot> _snapshot = widget.store.loadDashboard();
 
+  /// Lignes retirées de l'affichage avant la fin de l'écriture en base.
+  ///
+  /// Sans ce retrait immédiat, la liste se reconstruisait encore avec la ligne
+  /// déjà « dismissed » par le glissement : Flutter rouvrait alors un bref
+  /// message d'erreur (assertion du `Dismissible`) qui disparaissait au rebuild
+  /// suivant. Le retrait local supprime la course, puis la base confirme.
+  final Set<String> _hidden = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -143,25 +151,60 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Future<void> _delete(TransactionLine line) async {
+  /// Supprime un mouvement et renvoie vrai si la base a bien été mise à jour.
+  ///
+  /// La ligne disparaît de l'écran tout de suite (aucune animation de
+  /// `Dismissible` ne se termine), puis SQLite est écrit. En cas d'échec, la
+  /// ligne revient, une seule erreur claire est affichée et l'exception est
+  /// journalisée (type + pile courte) pour le diagnostic.
+  Future<bool> _delete(TransactionLine line) async {
+    final String id = line.transaction.id;
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
-    await widget.store.deleteTransaction(line.transaction);
-    widget.revision.bump();
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(AkibaL10n.tr('movement_deleted')),
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: AkibaL10n.tr('cancel'),
-            onPressed: () async {
-              await widget.store.saveTransaction(line.transaction);
-              widget.revision.bump();
-            },
+    final AkibaColors colors = AkibaColors.of(context);
+    setState(() => _hidden.add(id));
+    try {
+      await widget.store.deleteTransaction(line.transaction);
+      widget.revision.bump();
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(AkibaL10n.tr('movement_deleted')),
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: AkibaL10n.tr('cancel'),
+              onPressed: () async {
+                if (!mounted) return;
+                setState(() => _hidden.remove(id));
+                try {
+                  await widget.store.saveTransaction(line.transaction);
+                  widget.revision.bump();
+                } catch (error) {
+                  debugPrint(
+                    'AKIBA : restauration impossible '
+                    '(${error.runtimeType}).',
+                  );
+                }
+              },
+            ),
           ),
-        ),
-      );
+        );
+      return true;
+    } catch (error, stack) {
+      debugPrint('AKIBA : suppression impossible (${error.runtimeType}).');
+      debugPrintStack(stackTrace: stack, maxFrames: 8);
+      if (mounted) setState(() => _hidden.remove(id));
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(AkibaL10n.tr('delete_failed')),
+            backgroundColor: colors.danger,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      return false;
+    }
   }
 
   /// Bascule vers le thème suivant : Blanc → Sombre → Bleu → Vert → Or → Blanc.
@@ -240,7 +283,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               final List<Widget> side = <Widget>[
                 _ThirdPartyCard(balance: data.balance, masked: masked),
                 _TransactionsCard(
-                  recent: data.recent,
+                  recent: <TransactionLine>[
+                    for (final TransactionLine line in data.recent)
+                      if (!_hidden.contains(line.transaction.id)) line,
+                  ],
                   masked: masked,
                   onSeeAll:
                       widget.onSeeAllMovements ??
@@ -648,7 +694,7 @@ class _TransactionsCard extends StatelessWidget {
   final bool masked;
   final VoidCallback onSeeAll;
   final ValueChanged<TransactionLine> onEdit;
-  final ValueChanged<TransactionLine> onDelete;
+  final Future<bool> Function(TransactionLine) onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -696,14 +742,18 @@ class _TransactionsCard extends StatelessWidget {
                       label: AkibaL10n.tr('delete'),
                       alignLeft: false,
                     ),
+                    // La suppression est faite ici et la ligne est retirée
+                    // localement : `Dismissible` ne termine jamais sa propre
+                    // animation, donc aucun état « dismissed » ne survit à un
+                    // rebuild. En cas d'échec, la ligne reste en place.
                     confirmDismiss: (DismissDirection direction) async {
                       if (direction == DismissDirection.startToEnd) {
                         onEdit(line);
                         return false;
                       }
-                      return true;
+                      await onDelete(line);
+                      return false;
                     },
-                    onDismissed: (_) => onDelete(line),
                     child: TransactionRow(
                       icon: TransactionDisplay.iconFor(line.transaction),
                       title: TransactionDisplay.titleFor(line.transaction),

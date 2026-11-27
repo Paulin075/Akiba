@@ -672,7 +672,9 @@ class ReportPdfBuilder {
           ),
           pw.SizedBox(height: 12),
           sectionTitle(
-            t('Avis et conseils de l’assistant', 'Assistant review and advice'),
+            report.advice.fromAi
+                ? t('Avis & analyse IA', 'AI review & analysis')
+                : t('Avis et conseils', 'Review and advice'),
           ),
           card(
             color: surface,

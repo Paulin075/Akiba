@@ -12,7 +12,7 @@ enum AiProvider {
     label: 'Gemini',
     detail: 'Clé Google AI Studio',
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    defaultModel: 'gemini-2.0-flash',
+    defaultModel: 'gemini-flash-latest',
     requiresKey: true,
   ),
   deepseek(
@@ -142,4 +142,49 @@ class AiProviderSettings {
 
   Future<void> setModel(AiProvider provider, String raw) =>
       settings.set('ai_model_${provider.id}', raw.trim());
+}
+
+/// Chooses the exact model used by the settings connectivity check.
+/// Gemini follows its configured priority, skipping IDs absent from the fresh
+/// catalog; compatible providers use their configured single model.
+String selectAiTestModel({
+  required AiProvider provider,
+  required List<String> selectedGeminiModels,
+  required List<String> availableModelIds,
+  required String configuredModel,
+}) {
+  if (!provider.isGemini) return configuredModel;
+  if (availableModelIds.isEmpty) return configuredModel;
+  return selectedGeminiModels.firstWhere(
+    availableModelIds.contains,
+    orElse: () => availableModelIds.first,
+  );
+}
+
+/// Activates a provider as soon as its key is stored.
+///
+/// The key immediately becomes usable by the assistant, its actions and the
+/// PDF report: the provider is persisted and remote calls are switched on, so
+/// nothing needs a restart or a hidden extra step.
+Future<void> activateAiProviderWithKey(
+  AkibaSettings settings,
+  AiProvider provider,
+) async {
+  await AiProviderSettings(settings).setProvider(provider);
+  await settings.setFlag('ai_remote_enabled', true);
+}
+
+/// Provider shown when the AI settings open.
+///
+/// An explicit choice that already has a key is never overridden. When the
+/// current provider has no key but exactly one provider does, that provider is
+/// selected automatically. Several keys (or none) keep the current choice so
+/// the application never guesses.
+AiProvider selectAiProviderOnOpen({
+  required AiProvider current,
+  required Set<AiProvider> providersWithKey,
+}) {
+  if (providersWithKey.contains(current)) return current;
+  if (providersWithKey.length == 1) return providersWithKey.first;
+  return current;
 }

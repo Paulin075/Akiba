@@ -55,7 +55,10 @@ void main() {
         gemini.uri.toString(),
         contains('models/gemini-2.0-flash:generateContent'),
       );
-      expect(gemini.uri.queryParameters['key'], 'AIza-cle-de-test');
+      // La clé part en en-tête, jamais dans l'URL : c'est la seule forme
+      // acceptée par les nouvelles clés `AQ.…`.
+      expect(gemini.headers['x-goog-api-key'], 'AIza-cle-de-test');
+      expect(gemini.uri.queryParameters.containsKey('key'), isFalse);
       expect(gemini.headers.containsKey('Authorization'), isFalse);
       expect(gemini.body, contains('"contents"'));
 
@@ -90,6 +93,44 @@ void main() {
         'http://127.0.0.1:11434/v1/chat/completions',
       );
       expect(ollama.headers.containsKey('Authorization'), isFalse);
+    });
+
+    test('un 400 Gemini est classé par son corps, pas par son code seul', () {
+      const String invalidKey =
+          '{"error":{"code":400,"message":"API key not valid. Please pass '
+          'a valid API key.","status":"INVALID_ARGUMENT","details":'
+          '[{"reason":"API_KEY_INVALID"}]}}';
+      expect(
+        AiHttpException(400, aiErrorText(invalidKey)).kind,
+        AiFailureKind.auth,
+      );
+
+      const String missingModel =
+          '{"error":{"code":404,"message":"models/gemini-1.5-pro is not '
+          'found for API version v1beta","status":"NOT_FOUND"}}';
+      expect(
+        AiHttpException(404, aiErrorText(missingModel)).kind,
+        AiFailureKind.model,
+      );
+
+      const String exhausted =
+          '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}';
+      expect(
+        AiHttpException(429, aiErrorText(exhausted)).kind,
+        AiFailureKind.quota,
+      );
+
+      // Le texte d'erreur reste borné et ne contient jamais de clé.
+      expect(aiErrorText('pas du json'), 'pas du json');
+      expect(aiErrorText('<html>502</html>'), isEmpty);
+      expect(
+        aiErrorText(
+          '{"error":{"message":"Incorrect API key provided: '
+          'AQ.secret-cle-123456"}}',
+          secret: 'AQ.secret-cle-123456',
+        ),
+        isNot(contains('AQ.secret-cle-123456')),
+      );
     });
 
     test('les deux formats de réponse sont lus', () {

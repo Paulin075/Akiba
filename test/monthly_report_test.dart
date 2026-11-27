@@ -279,6 +279,38 @@ void main() {
     await settings.setLanguage('fr');
   });
 
+  test('une réponse JSON du modèle arrive telle quelle dans le PDF', () async {
+    await settings.setFlag('ai_remote_enabled', true);
+    await settings.set('ai_provider', 'ollama');
+    final MonthlyReport base = await MonthlyReport.build(
+      store: store,
+      settings: settings,
+    );
+    final MonthlyReport enriched = await ReportAdvisor(
+      transportOverride:
+          ({
+            required String modelId,
+            required String prompt,
+            required Duration timeout,
+          }) async =>
+              '{"avis": "Un mois sous contrôle", "conseils": ["Plafonnez '
+              'l’alimentation", "Versez au coffre avant de dépenser", '
+              '"Réglez la dette la plus proche"]}',
+    ).enrich(base, settings);
+
+    expect(enriched.advice.fromAi, isTrue);
+    expect(enriched.advice.headline, 'Un mois sous contrôle');
+    expect(enriched.advice.tips, hasLength(3));
+    expect(enriched.advice.tips.first, contains('Plafonnez'));
+
+    final Uint8List bytes = await ReportPdfBuilder(
+      logoBytes: Uint8List(0),
+    ).build(enriched);
+    final String raw = latin1.decode(bytes, allowInvalid: true);
+    expect(raw, contains('contrôle'));
+    expect(raw, contains('Plafonnez'));
+  });
+
   test('sans IA disponible, le rapport garde son avis local', () async {
     final MonthlyReport base = await MonthlyReport.build(
       store: store,

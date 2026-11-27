@@ -679,3 +679,13 @@ Reste ouvert : rendu visuel de la transition et des messages non observé sur ap
 - Fait : consigne du rapport en JSON explicite (FR/EN) et delai d'analyse porte a 18 s.
 - Tests : `test/ai_text_test.dart`, `test/monthly_report_test.dart` (JSON du modele dans le PDF), plage de delai dans `test/core_test.dart` ; 65 tests cibles passes, `flutter analyze` sans issue, APK debug reconstruit et installe.
 - Reste a verifier sur appareil : carte conseil de l'assistant avec une vraie reponse Gemini, et carte « Avis & analyse IA » d'un PDF genere.
+
+### Etape 35 - Epargne pilotee par l'assistant et code serveur (27/11/2026)
+
+- Fait : « 100 francs par jour pour un moniteur » n'est plus une depense « Alimentation » ; l'analyse locale cree un objectif d'epargne (nom du coffre, prix, versement quotidien, premier versement « demain »).
+- Fait : la carte d'objectif calcule le nombre de versements et la date d'atteinte, cree le `SavingsPot` de type `goal` et memorise le rythme ; aucun debit automatique n'est ecrit.
+- Fait : action `savings_goal` ajoutee a la consigne JSON du modele et relue dans `_readRemote`.
+- Fait : sauvegarde Home Lab protegee par un code a 4 chiffres (enveloppe version 4, `PBKDF2-CODE`), demande a la configuration et a la restauration ; plus besoin du compte Google ; oubli = sauvegarde a ecraser et redepart a zero.
+- Tests : `test/savings_plan_test.dart`, `test/backup_code_test.dart`, `test/home_lab_setup_test.dart` ; `flutter analyze` sans issue.
+- Reste a verifier sur appareil : phrase dictee dans l'assistant (carte d'objectif, creation du coffre, date affichee) et parcours reel serveur (code defini, restauration sur un second appareil, code faux puis ecrasement).
+- Reste a faire si voulu : rappel quotidien du versement d'epargne et bouton « verser 100 FCFA » dans la carte ; automatisation d'autres ecrans (budgets, reglages) par l'assistant.

@@ -151,3 +151,38 @@ dossier Drive synchronisé de l'appareil.
 | Réponse vide | message explicite « hors format », jamais une carte vide |
 | Rapport PDF | l'avis du modèle est injecté tel quel (nettoyé) quand il est lisible ; le repli local ne sert qu'en cas d'absence ou d'erreur réelle |
 | Montants | jamais inventés par le nettoyeur ; seuls les montants déjà présents dans la réponse sont mis en gras |
+
+---
+
+## 8. Actions de l'assistant
+
+| Action | Écriture | Garde-fou |
+| --- | --- | --- |
+| Dépense / entrée | une transaction sur le compte choisi | carte relue, montant éditable |
+| Transfert | deux écritures symétriques | comptes source et destination différents |
+| Argent de tiers | transaction neutre, hors solde/budget/statistiques | case « Tiers » |
+| Créance / dette | ligne `debts`, hors trésorerie | sens déduit de la phrase, jamais inversé par un modèle |
+| Règlement | mouvement réel + mise à jour du reste dû | ligne existante sélectionnée |
+| Versement
+| Versement d'épargne | transaction `savings` rattachée à un coffre | coffre « Épargne libre » créé au besoin |
+| Objectif d'épargne récurrent | `SavingsPot` de type `goal` + rythme mémorisé | prix demandé, aucun débit automatique |
+
+- Une phrase de rythme (« par jour ») est traitée **localement avant** tout
+  modèle distant : elle ne peut pas devenir une dépense.
+- Le modèle distant ne reçoit jamais un montant en mode masqué ; ses réponses
+  restent des propositions relues.
+- « Faire n'importe quoi » se limite aux écritures listées : l'assistant ne
+  modifie ni les thèmes, ni les réglages, ni les écrans hors de ce catalogue.
+
+---
+
+## 9. Code à 4 chiffres du serveur de sauvegarde
+
+| Règle | Application |
+| --- | --- |
+| Quand il est demandé | une fois à la configuration Home Lab (étape 2), puis à chaque restauration |
+| Où il vit | coffre du système (`akiba_backup_code`), jamais dans les réglages, l'enveloppe ou les journaux |
+| Ce qu'il chiffre | enveloppe version 4, `kdf: PBKDF2-CODE`, sel aléatoire de 16 octets, PBKDF2-SHA256 120 000 tours |
+| Ce qu'il remplace | la dépendance au compte Google pour les sauvegardes du serveur ; Drive garde son propre chemin |
+| Oubli | aucune récupération possible : nouvelle sauvegarde avec un nouveau code, `latest.json` remplacé, redépart à zéro |
+| Limite | 10 000 combinaisons : protège d'une lecture accidentelle, pas d'un attaquant patient avec le fichier |

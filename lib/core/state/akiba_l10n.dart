@@ -75,6 +75,8 @@ abstract final class AkibaL10n {
       'no_movement_note':
           'Touchez le cochon AKIBA pour ajouter votre première ligne.',
       'movement_deleted': 'Mouvement supprimé',
+      'delete_failed':
+          'Suppression impossible : le mouvement est conservé. Réessayez.',
       'cancel': 'Annuler',
       'planned_in': '{label} — prévu en {phase}.',
       'db_unreadable': 'Base locale illisible',
@@ -196,6 +198,8 @@ abstract final class AkibaL10n {
       'no_movement': 'No transactions yet',
       'no_movement_note': 'Tap the AKIBA pig to add your first entry.',
       'movement_deleted': 'Transaction deleted',
+      'delete_failed':
+          'Could not delete: the transaction is kept. Please try again.',
       'cancel': 'Cancel',
       'planned_in': '{label} — planned for {phase}.',
       'db_unreadable': 'Local database unreadable',

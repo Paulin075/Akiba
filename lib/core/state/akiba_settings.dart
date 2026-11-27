@@ -73,6 +73,10 @@ class AkibaSettings extends ChangeNotifier {
     'last_backup_at': '',
     'last_backup_target': '',
     'restore_pending_at': '',
+    'restore_done': '0',
+    // Horodatage d'une sauvegarde automatique qui a échoué (réseau absent).
+    // Non vide = une nouvelle tentative est programmée / à faire au retour.
+    'auto_backup_pending_at': '',
     'ai_quota_per_day': '20',
     'ai_quota_date': '',
     'ai_quota_used': '0',

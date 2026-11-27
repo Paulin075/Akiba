@@ -886,20 +886,25 @@ void main() {
 
     test('l’ordre de priorité est respecté et nettoyé', () {
       final List<AiModel> available = AiModelCatalog.seeds;
-      const String stored = 'gemini-1.5-pro,inconnu,gemini-2.0-flash';
+      final String stored =
+          '${available.last.id},inconnu,${available.first.id}';
 
       final List<AiModel> selected = AiModelCatalog.selected(available, stored);
       expect(selected.length, 2);
-      expect(selected.first.id, 'gemini-1.5-pro');
-      expect(selected.last.id, 'gemini-2.0-flash');
+      expect(selected.first.id, available.last.id);
+      expect(selected.last.id, available.first.id);
       expect(selected.any((AiModel m) => m.id == 'inconnu'), isFalse);
+
+      // Un identifiant retiré du catalogue (les 1.5 ne répondent plus) est
+      // ignoré au lieu de bloquer un appel sur un modèle inexistant.
+      expect(AiModelCatalog.selected(available, 'gemini-1.5-pro'), isEmpty);
 
       // Un réglage vide garde tous les modèles connus.
       expect(AiModelCatalog.selected(available, '').length, available.length);
 
       final String cache = AiModelCatalog.encode(available);
       expect(AiModelCatalog.decode(cache).length, available.length);
-      expect(AiModelCatalog.decode('').length, 4);
+      expect(AiModelCatalog.decode('').length, available.length);
     });
   });
 
@@ -913,7 +918,7 @@ void main() {
     test('les délais suivent le type de tâche', () {
       expect(AiTask.quickEntry.seconds, inInclusiveRange(4, 6));
       expect(AiTask.smsReview.seconds, inInclusiveRange(4, 6));
-      expect(AiTask.analysis.seconds, inInclusiveRange(8, 12));
+      expect(AiTask.analysis.seconds, inInclusiveRange(8, 20));
       expect(AiTask.coaching.seconds, inInclusiveRange(8, 12));
     });
 
